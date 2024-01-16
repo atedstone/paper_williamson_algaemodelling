@@ -1,12 +1,14 @@
 # ---
 # jupyter:
 #   jupytext:
+#     cell_metadata_filter: all
 #     formats: ipynb,py:percent
+#     notebook_metadata_filter: all,-language_info
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.14.7
+#       jupytext_version: 1.14.4
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -24,7 +26,17 @@
 #
 # Exports to NetCDFs with same basic dimensions as MAR inputs.
 
-# %%
+# %% trusted=true
+# local
+# inputs_path = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+# mar_example = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
+
+# beo05
+inputs_path = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+mar_example = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
+output_path = '/flash/tedstona/williamson/outputs/'
+
+# %% trusted=true
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -32,6 +44,7 @@ from datetime import datetime
 import xarray as xr
 import rioxarray
 from copy import deepcopy
+import os
 
 def carbon_func_106pg(x):
     x = x / 0.84  # assuming 0.84 ng DW per cell
@@ -65,6 +78,9 @@ def prepare_model_inputs(
 
     # Read in snow pack height above ice (SHSN2)
     shsn2 = nc_file.SHSN2
+    # Only run the model in pixels which have snow cover at the start of the model run
+    # This line basically masks out interior ice sheet pixels, which always have SHSN2=0.
+    shsn2 = shsn2.where(shsn2.isel(TIME=0) > 0)
 
     # Read in shortwave-down
     light = nc_file.SWD
@@ -76,7 +92,7 @@ def prepare_model_inputs(
     x = nc_file.x
     y = nc_file.y
 
-    hourly_masked = (light > light_thres) & (temp > temp_thres) & (shsn2 > snow_thres) 
+    hourly_masked = (light > light_thres) & (temp > temp_thres) & (shsn2 < snow_thres) 
     daily = hourly_masked.resample(TIME='1D').sum().squeeze()
     daily.name = 'daily_prod_hrs'
 
@@ -84,7 +100,18 @@ def prepare_model_inputs(
 
 
 
-# %%
+# %% trusted=true
+from dask_jobqueue import SLURMCluster as MyCluster
+from dask.distributed import Client
+cluster = MyCluster()
+cluster.scale(jobs=4)
+client = Client(cluster)
+
+# %% trusted=true
+client
+
+
+# %% trusted=true
 def run_model_annual(prod_hrs, initial_bio, percent_loss):
     
     bio = initial_bio
@@ -130,19 +157,39 @@ def run_model_annual(prod_hrs, initial_bio, percent_loss):
     return (cum_growth, daily_production)
 
 
-# %%
-mar = xr.open_dataset('/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc')
+# %% trusted=true
+mar = xr.open_dataset(mar_example)
 mar = mar.rename({'Y19_288':'y', 'X14_163':'x'})
 mar = mar.rio.write_crs('epsg:3413')
 
-# %%
+# %% trusted=true
+# MAIN MODEL RUN
+
+initial_bio = 179
+pl = 0.1
+
+for year in range(2000, 2023):
+    print(year)
+    pth = inputs_path.format(year=year)
+    hours = prepare_model_inputs(pth)
+    
+    bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+    cg, dp = run_model_annual(hours, bio, pl)
+
+    full_out = xr.merge([hours, cg, dp])
+    full_out.to_netcdf(os.path.join(output_path, 'main_outputs', f'model_outputs_{year}_ibio{initial_bio}_ploss{pl}.nc'))
+
+# %% trusted=true
+# SENSITIVITY RUNS
+
 initial_bio = 179
 ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
 ibio = [initial_bio*0.1, initial_bio, initial_bio*5, initial_bio*10]
 
 for year in range(2000, 2023):
     print(year)
-    pth = f'/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+    pth = inputs_path.format(year=year)
     hours = prepare_model_inputs(pth)
     for pl in ploss:
         
@@ -151,12 +198,12 @@ for year in range(2000, 2023):
         cg, dp = run_model_annual(hours, bio, pl)
 
         full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(f'/scratch/williamson/model_outputs_{year}_ibio179_ploss{pl}.nc')
+        full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ploss', f'model_outputs_{year}_ibio179_ploss{pl}.nc'))
         
 
 for year in range(2000, 2023):
     print(year)
-    pth = f'/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+    pth = inputs_path.format(year=year)
     hours = prepare_model_inputs(pth)
     for ib in ibio:
 
@@ -165,4 +212,9 @@ for year in range(2000, 2023):
         cg, dp = run_model_annual(hours, bio, 0.10)
 
         full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(f'/scratch/williamson/model_outputs_{year}_ploss0.1_ibio{ib}.nc')  
+        full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ibio', f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'))
+
+# %% trusted=true
+full_out.cum_growth.where(mar.MSK > 50).where(full_out.cum_growth > 179).sum(dim='TIME').plot()
+
+# %%
