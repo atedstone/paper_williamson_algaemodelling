@@ -114,7 +114,7 @@ client
 # %% trusted=true
 def run_model_annual(prod_hrs, initial_bio, percent_loss):
     
-    bio = initial_bio
+    bio = deepcopy(initial_bio)
     
     store_cum_growth = []
     store_today_production = []
@@ -215,6 +215,9 @@ for year in range(2000, 2023):
         full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ibio', f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'))
 
 # %% trusted=true
+ibio
+
+# %% trusted=true
 full_out.cum_growth.where(mar.MSK > 50).where(full_out.cum_growth > 179).sum(dim='TIME').plot()
 
-# %%
+# %% trusted=true
