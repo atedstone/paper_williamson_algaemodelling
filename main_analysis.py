@@ -173,7 +173,7 @@ coords = {
     'Mittivak': {'p': Point((-37.8, 65.7)), 'color':cmap[2]},
     'South': {'p': Point((-46.8470, 61.1004)), 'color':cmap[3]}
 }
-coords1 = gpd.GeoDataFrame(
+pts_wgs84 = gpd.GeoDataFrame(
     { 
      'color':[coords[c]['color'] for c in coords]
     },
@@ -181,15 +181,15 @@ coords1 = gpd.GeoDataFrame(
     geometry=[coords[c]['p'] for c in coords], 
     crs=4326
 )
-pts = coords1.to_crs(3413)
+pts_ps = pts_wgs84.to_crs(3413)
 #pts.index = pts.site_name
-pts
+pts_ps
 
 # %% trusted=true
 # Sanity-check the points
 fig, ax = plt.subplots()
 mar.MSK.plot(ax=ax)
-pts.plot(ax=ax, marker='x', color='r')
+pts_ps.plot(ax=ax, marker='x', color='r')
 
 # %% trusted=true
 basins = gpd.read_file(BASINS_FILE)
@@ -235,7 +235,7 @@ for ib in ibio:
     sens_ibio['y'] = mar.y
     store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).resample(TIME='1AS').max(dim='TIME').median(dim=('x','y')).to_pandas()
     
-    v = sens_ibio.cum_growth.sel(x=pts.loc['UPE'].geometry.x, y=pts.loc['UPE'].geometry.y, method='nearest').to_pandas()
+    v = sens_ibio.cum_growth.sel(x=pts_ps.loc['UPE'].geometry.x, y=pts_ps.loc['UPE'].geometry.y, method='nearest').to_pandas()
     site_store[ib] = v
 ibio_max = pd.DataFrame(store)
 ibio_upe = pd.DataFrame(site_store)
@@ -391,7 +391,7 @@ last_prod_doy = last_prod_doy.reindex(TIME=pd.date_range(last_prod_doy['TIME'].i
 # %% trusted=true
 # Extract time series of population size
 store = {}
-for ix, row in pts.iterrows():
+for ix, row in pts_ps.iterrows():
     v = main_outputs.cum_growth.sel(x=row.geometry.x, y=row.geometry.y, method='nearest').to_pandas()
     store[ix] = v
 ts = pd.DataFrame(store)
@@ -403,7 +403,7 @@ plt.figure(figsize=(3.5,2.5))
 for site in ts.columns:
     data = ts.loc[str(year)][site]
     plt.plot(data.index, data, c=pts.loc[site]['color'], label=site, linewidth=1.2)
-    doy_end = int(last_prod_doy.sel(x=pts.loc[site].geometry.x, y=pts.loc[site].geometry.y, method='nearest').sel(TIME=str(year)).values[0])
+    doy_end = int(last_prod_doy.sel(x=pts_ps.loc[site].geometry.x, y=pts_ps.loc[site].geometry.y, method='nearest').sel(TIME=str(year)).values[0])
     date_end = dt.datetime.strptime(f'{year}-{doy_end}', '%Y-%j')
     plt.plot(date_end, data.loc[date_end], 'd', c=pts.loc[site]['color'])
 sns.despine()
@@ -574,9 +574,15 @@ RENAME_TO = 'biomass'
 
 
 # %% trusted=true
-# https://gist.github.com/tsemerad/5053378
+# Based on https://gist.github.com/tsemerad/5053378
+# and https://gist.github.com/jeteon/89c41e4081d87b798d8006b16a52c695
 def dms_to_dd(d, m, s):
-    dd = d + float(m)/60 + float(s)/3600
+    if d < 0:
+        sign = -1
+        d = np.abs(d)
+    else:
+        sign = 1
+    dd = sign * (d + float(m)/60 + float(s)/3600)
     return dd
 
 
@@ -601,7 +607,7 @@ chev = meas['chevrollier_2022_2021_counts_south_gris'].groupby('date').mean()
 chev = chev.reset_index()
 chev['date'] = pd.to_datetime(chev['date'], dayfirst=True)
 chev = chev.rename({bmc:RENAME_TO}, axis='columns')
-chev['geom'] = pts.loc['South'].geometry
+chev['geom'] = pts_wgs84.loc['South'].geometry
 chev['site'] = 'South'
 chev['d_id'] = 'chev'
 chev['biomass_col'] = bmc
@@ -635,8 +641,10 @@ lutz['d_id'] = 'lutz'
 lutz['site'] = 'mit'
 lutz['biomass_col'] = bmc
 
+# %%
+
 # %% trusted=true
-meas['williamson_2016_count_biomass_all_2016']
+halb_meta
 
 # %% trusted=true
 ## S6
@@ -647,7 +655,7 @@ bmc = 'cells/ml'
 stib = meas['stibal_2017'].filter(items=['doy 2014', bmc], axis='columns').dropna()
 stib['date'] = [dt.datetime.strptime(f'2014-{int(d)}', '%Y-%j') for d in stib['doy 2014']]
 stib = stib.groupby('date').mean().reset_index()
-stib['geom'] = pts.loc['S6'].geometry
+stib['geom'] = pts_wgs84.loc['S6'].geometry
 stib = stib.rename({bmc:RENAME_TO}, axis='columns')
 stib = stib.drop(labels=['doy 2014'], axis='columns')
 stib['site'] = 'S6'
@@ -663,6 +671,7 @@ w16s6['date'] = [dt.datetime.strptime(d, '%d.%m.%y') for d in w16s6['date']]
 # Retain only the low, medium and high habitats
 w16s6 = w16s6[w16s6.habitat.isin(['l', 'm', 'h'])]
 # Then only keep days on which all three habitats were sampled.
+habs_check = w16s6.groupby(['date', 'habitat']).count()
 hc = habs_check.unstack()
 # On some days, only the high biomasss habitat was sampled. Only retain days on which all habitats were sampled.
 valid_days = hc[
@@ -673,11 +682,17 @@ valid_days = hc[
 w16s6 = w16s6[w16s6.date.isin(valid_days.index)]
 
 w16s6 = w16s6.groupby('date').mean().reset_index()
-w16s6['geom'] = pts.loc['S6'].geometry
+w16s6['geom'] = pts_wgs84.loc['S6'].geometry
 w16s6 = w16s6.rename({bmc:RENAME_TO}, axis='columns')
 w16s6['d_id'] = 'w16_s6'
 w16s6['site'] = 'S6'
 w16s6['biomass_col'] = bmc
+
+# %% trusted=true
+stib
+
+# %% trusted=true
+stib
 
 # %% trusted=true
 ## K-Transect
@@ -697,7 +712,7 @@ w16k_meta = {
     's1':   Point((-47.5433, 67.0631)),    # =S1b
     's2':   Point((-48.3064, 67.0571)),
     's3':   Point((-48.8929, 67.0913)),
-    'h':    pts.loc['S6'].geometry
+    'h':    pts_wgs84.loc['S6'].geometry
 }
 w16k_meta = pd.Series(w16k_meta, name='geom')
 w16k = pd.merge(left=w16k, right=pd.Series(w16k_meta), left_on='habitat', right_index=True)
@@ -730,7 +745,7 @@ bmc = 'cells.per.ml'
 upe = meas['williamson_2018_upe_u_cell_counts'].filter(items=[bmc], axis='columns')
 upe = upe.mean()
 upe['date'] = dt.datetime(2018, 7, 26)
-upe['geom'] = pts.loc['UPE'].geometry
+upe['geom'] = pts_wgs84.loc['UPE'].geometry
 upe = upe.rename({bmc:RENAME_TO})
 upe['site'] = 'UPE'
 upe['biomass_col'] = bmc
@@ -741,32 +756,45 @@ upe = pd.DataFrame(upe).T
 ## Join all datasets together
 
 measurements = pd.concat([
-    chev,
+#    chev, # removed - see note(1)
     halb,
     lutz,
     stib,
     w16s6,
     w16k,
-#    w21k,
+#    w21k, # removed - see note(2)
     upe
 ], axis=0).reset_index()
+
+# %% [markdown]
+# *Note(1)* Chev. 2022, page 3: "The targeted surfaces were chosen to be roughly homogeneous on a wider surface in order to upscale the results for  1m2 areas, but are not representative of wider surfaces".
+#
+# *Note(2)* 2024-02-09: cells/ml in spreadsheet are one order of magnitude higher than all other datasets, suspect
+#
+
+# %% trusted=true
+# Clean the joined dataset
 measurements = measurements.drop(labels=['index'], axis='columns')
 measurements['biomass'] = pd.to_numeric(measurements['biomass'])
 
-# %% trusted=true
-measurements.biomass.mean()
-
-# %% trusted=true
-measurements.to_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'))
-
-# %% [markdown]
-# #### Compare measurements with modelled blooms
+# Convert to Polar Stereo to match MAR
+measurements = gpd.GeoDataFrame(measurements, geometry='geom', crs='epsg:4236')
+measurements = measurements.to_crs(3413)
 
 # %% trusted=true
 measurements
 
 # %% trusted=true
-main_outputs
+measurements.to_file(os.path.join(RESULTS,'measurements_merged.gpkg'))
+
+# %% trusted=true
+#measurements.to_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'))
+
+# %% [markdown]
+# #### Compare measurements with modelled blooms
+
+# %% trusted=true
+#measurements = pd.read_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'), index_col=0)
 
 # %% trusted=true
 store = []
@@ -776,16 +804,37 @@ for ix, row in measurements.iterrows():
 
 # %% trusted=true
 measurements['modelled_biomass_dw'] = store
-#measurements['modelled_biomass_dw'] = pd.to_numeric(measurements['modelled_biomass_dw'])
+
+# Convert measured values to DW
+measurements['biomass_dw'] = ww_to_dw(measurements['biomass'])
 
 # %% trusted=true
 # %matplotlib inline
 sns.scatterplot(
-    x=ww_to_dw(measurements['biomass']), 
+    x=measurements['biomass_dw'], 
     y=measurements['modelled_biomass_dw'],
     style=measurements['site'],
+    hue=measurements['d_id'],
     s=50
 )
+plt.grid()
+plt.xlim(0, 22000)
+plt.ylim(0, 22000)
+plt.xlabel(r'Measured biomass ng DW ml (wet$\times$0.84)')
+plt.ylabel('Modelled biomass ng DW ml')
+plt.legend(loc=(1.01,0))
+plt.title('Means of measured biomass, except Medians for Stibal')
+sns.despine()
+
+# %% trusted=true
+measurements[(measurements.site == 'S6') & (measurements.biomass_dw > 20000)]
+
+# %% trusted=true
+# %matplotlib widget
+fig, ax = plt.subplots()
+mar.MSK.plot(ax=ax)
+m = measurements[measurements.site == 'mit3']
+plt.plot(m.geom.x, m.geom.y, 'xr')
 
 # %% [markdown]
 # ### Is there a trend in annual bloom extent?
