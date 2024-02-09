@@ -88,6 +88,48 @@ RESULTS = '/flash/tedstona/williamson/results/'
 
 
 # %% [markdown]
+# ## Analysis functions
+
+# %% trusted=true
+def ww_to_dw(cells_per_ml):
+    """ Wet weight, e.g. cells per ml, to dry weight """
+    # assuming 0.84 ng DW per cell (C.W. Feb 2024)
+    return cells_per_ml * 0.84
+
+def dw_to_ww(dw):
+    """ Dry weight (e.g. from model) to cells per ml """
+    # assuming 0.84 ng DW per cell (C.W. Feb 2024)
+    return dw / 0.84
+
+def to_carbon(x, grid_km=10):
+    """ 
+     x : DataArray. Provide in units of cells per ml
+    """
+
+    #convert from cells per ml to pg C ml assuming 106 pg C per cell
+    x = x * 106
+
+    #- pg C ml to pg C per L
+    x = x * 1000
+
+    #- pg C per l to pg C per m2 #using conversion from Williamson et al. 2018
+    x = x * 1.061
+
+    #- pg C per m2 to pg C per km2
+    x = x * 10^6
+
+    #- pg C per km2 to kg of C per km2
+    x = x * 10^-15
+
+    #total kg.C.per pixel
+    #total kg of C per km2 * number of km2 per pixel 
+    total_kg_C_pixel = total_kg_C_km2 * grid_km**2
+    
+    return total_kg_C_pixel
+
+
+
+# %% [markdown]
 # ## Plotting functions
 
 # %% trusted=true
@@ -121,9 +163,6 @@ mar = xr.open_dataset(MAR_REF)
 mar['x'] = mar['x'] * 1000
 mar['y'] = mar['y'] * 1000
 mar = mar.rio.write_crs('epsg:3413')
-
-# %% trusted=true
-cmap
 
 # %% trusted=true
 # Sampling coordinates and colours
@@ -182,6 +221,40 @@ if regenerate:
 else:
     ibio_quant90 = pd.read_csv(os.path.join(RESULTS, 'ibio_quant90.csv'), index_col=0, parse_dates=True)
     ibio_quant90.columns = [int(np.round(float(c))) for c in ibio_quant90.columns]
+
+# %% trusted=true
+# Here, do the same analysis but with the more straightforward annual median of all maximum pop sizes
+# And also pull out time series of individual sites.
+ibio = [17.900000000000002, 179, 895, 1790]
+store = {}
+site_store = {}
+for ib in ibio:
+    print(ib)
+    sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
+    sens_ibio['x'] = mar.x
+    sens_ibio['y'] = mar.y
+    store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).resample(TIME='1AS').max(dim='TIME').median(dim=('x','y')).to_pandas()
+    
+    v = sens_ibio.cum_growth.sel(x=pts.loc['UPE'].geometry.x, y=pts.loc['UPE'].geometry.y, method='nearest').to_pandas()
+    site_store[ib] = v
+ibio_max = pd.DataFrame(store)
+ibio_upe = pd.DataFrame(site_store)
+
+# %% trusted=true
+ibio_upe.loc['2016'].plot()
+
+# %% trusted=true
+ibio_max.plot(
+    logy=False,
+    legend=False,
+    colormap=sns.color_palette('flare', as_cmap=True)
+)
+
+# %%
+store = {}
+for ix, row in pts.iterrows():
+    
+ts = pd.DataFrame(store)
 
 # %% [markdown] tags=[]
 # ### Sensitivity to loss term
@@ -491,6 +564,11 @@ plt.savefig(os.path.join(RESULTS, 'fig_bloom_percent_cover.pdf'), bbox_inches='t
 # %% [markdown]
 # ### Comparison with measured biomass population
 
+# %% [markdown]
+# #### Codify all available measurements 
+#
+# This section applies a consistent name for the biomass, allocates dates and coordinates, and applies appropriate averaging to each dataset.
+
 # %% trusted=true
 RENAME_TO = 'biomass'
 
@@ -510,24 +588,23 @@ for csv in csvs:
     d = pd.read_csv(csv, parse_dates=True)
     csv_name = csv.split('/')[-1][:-4]
     meas[csv_name] = d
-
-# %% trusted=true
-chev
+    
+# Load Stibal separately - directly from their Excel Workbook
+meas['stibal_2017'] = pd.read_excel(os.path.join(MEAS_BIO, 'grl56634-sup-0002-2017gl075958_data_si.xlsx'), sheet_name='algal cells time series data')
 
 # %% trusted=true
 ## South Greenland
 
 # chev provides date. Average all the sites on each day.
+bmc = 'ia.cells.ml'
 chev = meas['chevrollier_2022_2021_counts_south_gris'].groupby('date').mean()
 chev = chev.reset_index()
 chev['date'] = pd.to_datetime(chev['date'], dayfirst=True)
-chev = chev.rename({'ia.cells.ml':RENAME_TO}, axis='columns')
+chev = chev.rename({bmc:RENAME_TO}, axis='columns')
 chev['geom'] = pts.loc['South'].geometry
+chev['site'] = 'South'
 chev['d_id'] = 'chev'
-chev['biomass_col'] = 'ia.cells.ml'
-
-# %% trusted=true
-chev
+chev['biomass_col'] = bmc
 
 # %% trusted=true
 ## South East Greenland 
@@ -546,7 +623,7 @@ halb = pd.merge(left=halb, right=pd.DataFrame(halb_meta).T, left_on='site', righ
 halb['d_id'] = 'halb'
 halb['biomass_col'] = bmc
 
-# Lutz dataset does not provide exact dates, so force the mid-date of their campaign (6-23 July 2012)
+# Lutz Mittivakkat dataset does not provide exact dates, so force the mid-date of their campaign (6-23 July 2012)
 # All values were acquired within a 1 km2 area, so also okay to force a single coordinate.
 bmc = 'cells.ml'
 lutz = meas['lutz_2012_se_greenland']
@@ -555,27 +632,51 @@ lutz['date'] = dt.datetime(2012, 7, 6+(23-6))
 # Estimate the centre point of Lutz et al. (2014) Figure 1.
 lutz['geom'] = Point((-37.87, 65.685))
 lutz['d_id'] = 'lutz'
+lutz['site'] = 'mit'
 lutz['biomass_col'] = bmc
+
+# %% trusted=true
+meas['williamson_2016_count_biomass_all_2016']
 
 # %% trusted=true
 ## S6
 
 # stib provides date. Average all the samples on each day.
-# !!! Are Stibal data all within one MAR pixel of S6? 
-stib = meas['marek_2017_data'].filter(items=['doy 2014', 'cells/ml'], axis='columns').dropna()
+# All Stibal values were acquired at S6 (see paper).
+bmc = 'cells/ml'
+stib = meas['stibal_2017'].filter(items=['doy 2014', bmc], axis='columns').dropna()
 stib['date'] = [dt.datetime.strptime(f'2014-{int(d)}', '%Y-%j') for d in stib['doy 2014']]
-stib = stib.groupby('date').mean()
+stib = stib.groupby('date').mean().reset_index()
+stib['geom'] = pts.loc['S6'].geometry
+stib = stib.rename({bmc:RENAME_TO}, axis='columns')
+stib = stib.drop(labels=['doy 2014'], axis='columns')
+stib['site'] = 'S6'
+stib['biomass_col'] = bmc
 stib['d_id'] = 'stib'
 
+
 # williamson 2016 @ S6 provides date
-# !!! check correct column is being used!
-bmc = 'total.biomass.ng.DW.ml'
-w16s6 = meas['williamson_2016_count_biomass_all_2016'].filter(items=['date', bmc], axis='columns').dropna()
+bmc = 'overall.cells.per.ml'
+w16s6 = meas['williamson_2016_count_biomass_all_2016'].filter(items=['date', 'habitat', bmc], axis='columns').dropna()
 w16s6['date'] = [dt.datetime.strptime(d, '%d.%m.%y') for d in w16s6['date']]
+
+# Retain only the low, medium and high habitats
+w16s6 = w16s6[w16s6.habitat.isin(['l', 'm', 'h'])]
+# Then only keep days on which all three habitats were sampled.
+hc = habs_check.unstack()
+# On some days, only the high biomasss habitat was sampled. Only retain days on which all habitats were sampled.
+valid_days = hc[
+    (hc[('overall.cells.per.ml','h')] > 0) & 
+    (hc[('overall.cells.per.ml','l')] > 0) & 
+    (hc[('overall.cells.per.ml','m')] > 0)
+]
+w16s6 = w16s6[w16s6.date.isin(valid_days.index)]
+
 w16s6 = w16s6.groupby('date').mean().reset_index()
 w16s6['geom'] = pts.loc['S6'].geometry
 w16s6 = w16s6.rename({bmc:RENAME_TO}, axis='columns')
 w16s6['d_id'] = 'w16_s6'
+w16s6['site'] = 'S6'
 w16s6['biomass_col'] = bmc
 
 # %% trusted=true
@@ -586,6 +687,10 @@ w16s6['biomass_col'] = bmc
 bmc = 'my.count'
 w16k = meas['Williamson_dash_2016_space_for_time_counts'].filter(items=['date', 'habitat', bmc], axis='columns').dropna()
 w16k['date'] = [dt.datetime.strptime(d, '%d.%m.%y') for d in w16k['date']]
+# Calculate averages for each site on each date
+w16k = w16k.groupby(['habitat', 'date'])[bmc].mean().reset_index()
+
+# Attach spatial information through a merge
 # Coordinates taken from Williamson et al 2018 FEMS, matching to the 'habitat' names in the dataset.
 w16k_meta = {
     'kanu': Point((-47.0154, 67.0003)),    # =S1a
@@ -596,7 +701,8 @@ w16k_meta = {
 }
 w16k_meta = pd.Series(w16k_meta, name='geom')
 w16k = pd.merge(left=w16k, right=pd.Series(w16k_meta), left_on='habitat', right_index=True)
-w16k = w16k.rename({bmc:RENAME_TO}, axis='columns')
+
+w16k = w16k.rename({bmc:RENAME_TO, 'habitat':'site'}, axis='columns')
 w16k['d_id'] = 'w16_dash'
 w16k['biomass_col'] = bmc
 
@@ -612,6 +718,7 @@ w21k['date'] = dt.datetime(2019, 8, 9)
 w21k['geom'] = Point((-50.027204, 67.155493))
 w21k['d_id'] = 'w19_660'
 w21k = w21k.rename({bmc:RENAME_TO})
+w21k['site'] = 'P660'
 w21k['biomass_col'] = bmc
 w21k = pd.DataFrame(w21k).T
 
@@ -625,12 +732,10 @@ upe = upe.mean()
 upe['date'] = dt.datetime(2018, 7, 26)
 upe['geom'] = pts.loc['UPE'].geometry
 upe = upe.rename({bmc:RENAME_TO})
+upe['site'] = 'UPE'
 upe['biomass_col'] = bmc
 upe['d_id'] = 'upe'
 upe = pd.DataFrame(upe).T
-
-# %% trusted=true
-upe
 
 # %% trusted=true
 ## Join all datasets together
@@ -639,14 +744,48 @@ measurements = pd.concat([
     chev,
     halb,
     lutz,
+    stib,
     w16s6,
     w16k,
-    w21k,
+#    w21k,
     upe
 ], axis=0).reset_index()
+measurements = measurements.drop(labels=['index'], axis='columns')
+measurements['biomass'] = pd.to_numeric(measurements['biomass'])
+
+# %% trusted=true
+measurements.biomass.mean()
 
 # %% trusted=true
 measurements.to_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'))
+
+# %% [markdown]
+# #### Compare measurements with modelled blooms
+
+# %% trusted=true
+measurements
+
+# %% trusted=true
+main_outputs
+
+# %% trusted=true
+store = []
+for ix, row in measurements.iterrows():
+    v = main_outputs.cum_growth.sel(TIME=row['date']).sel(x=row['geom'].x, y=row['geom'].y, method='nearest')
+    store.append(float(v.values))
+
+# %% trusted=true
+measurements['modelled_biomass_dw'] = store
+#measurements['modelled_biomass_dw'] = pd.to_numeric(measurements['modelled_biomass_dw'])
+
+# %% trusted=true
+# %matplotlib inline
+sns.scatterplot(
+    x=ww_to_dw(measurements['biomass']), 
+    y=measurements['modelled_biomass_dw'],
+    style=measurements['site'],
+    s=50
+)
 
 # %% [markdown]
 # ### Is there a trend in annual bloom extent?
@@ -673,3 +812,32 @@ anuual_area = annual_biomass.where(annual_biomass > 179).count(dim=('x','y'))
 
 # %% trusted=true
 anuual_area.plot()
+
+# %% [markdown]
+# ## UPE: Compare MAR with PROMICE
+
+# %% trusted=true
+# !curl -o UPE_U_day.nc https://dataverse.geus.dk/api/access/datafile/:persistentId?persistentId=doi:10.22008/FK2/IW73UU/3YQDQS
+
+# %% trusted=true
+upeu = xr.open_dataset('UPE_U_day.nc')
+
+# %% trusted=true
+upeu.z_boom_u.plot()
+
+# %% trusted=true
+upeu.t_u.plot()
+
+# %% trusted=true
+mar_ts = xr.open_mfdataset('/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-*_05-09_ALGV.nc')
+mar_ts = mar_ts.rename({'Y19_288':'y', 'X14_163':'x'})
+mar_ts['x'] = mar.x
+mar_ts['y'] = mar.y
+
+# %% trusted=true
+# %matplotlib widget
+fig, ax = plt.subplots()
+mar_ts.sel(TIME=slice('2009-01-01', '2022-12-31')).sel(x=pts.loc['UPE'].geometry.x, y=pts.loc['UPE'].geometry.y, method='nearest').TT.plot(ax=ax, label='MAR')
+upeu.t_u.plot(ax=ax, label='AWS')
+
+# %%
