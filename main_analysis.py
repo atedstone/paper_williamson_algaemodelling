@@ -76,18 +76,29 @@ client
 MAR_REF = '/flash/tedstona/MARv3.14-ERA5-10km/MARv3.14.0-10km-daily-ERA5-2017.nc'
 # GrIS drainage basins
 BASINS_FILE = '/flash/tedstona/L0data/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp'
+
 # Growth model start and end
 YR_ST = 2000
 YR_END = 2022
+
+# Default parameters to use during analysis unless otherwise specified
 START_POP = 179
+P_LOSS = 0.10
+SNOW_DEPTH = 0.01
+SURF_T = 0.5
+LIGHT_T = 10
+
 # Algal growth model sensitivity runs (accessed by wildcard in script)
 MODEL_OUTPUTS_SENS_IBIO = '/flash/tedstona/williamson/outputs/sensitivity_ibio/'
 MODEL_OUTPUTS_SENS_PLOS = '/flash/tedstona/williamson/outputs/sensitivity_ploss/'
+MODEL_OUTPUTS_SENS_TEMP = '/flash/tedstona/williamson/outputs/sensitivity_temp/'
+MODEL_OUTPUTS_SENS_LIGH = '/flash/tedstona/williamson/outputs/sensitivity_light/'
+MODEL_OUTPUTS_SENS_SNOW = '/flash/tedstona/williamson/outputs/sensitivity_snowdepth/'
+
 # Main run of algal growth model
 MODEL_OUTPUTS_MAIN = '/flash/tedstona/williamson/outputs/main_outputs/'
-# Measured biomass datasets
-MEAS_BIO = '/flash/tedstona/williamson/glacier_algal_biomass_datasets/'
-# Where CSV and figure files will be saved to
+
+# Save location for figures, CSV files
 RESULTS = '/flash/tedstona/williamson/results/'
 
 
@@ -95,6 +106,13 @@ RESULTS = '/flash/tedstona/williamson/results/'
 # ## Analysis functions
 
 # %% trusted=true
+def open_model_run(path):
+    """ Load a model run at given path and update x/y coordinates to those from MAR reference run """
+    run = xr.open_mfdataset(path)
+    run['x'] = mar.x
+    run['y'] = mar.y
+    return run
+
 def ww_to_dw(cells_per_ml):
     """ Wet weight, e.g. cells per ml, to dry weight """
     # assuming 0.84 ng DW per cell (C.W. Feb 2024)
@@ -107,7 +125,10 @@ def dw_to_ww(dw):
 
 def to_carbon(x, grid_km=10):
     """ 
-     x : DataArray. Provide in units of cells per ml
+    x : DataArray. Provide in units of cells per ml
+    grid_km : size of grid cell in kilometres
+     
+    returns: kg carbon per model cell
     """
 
     #convert from cells per ml to pg C ml assuming 106 pg C per cell
@@ -120,14 +141,14 @@ def to_carbon(x, grid_km=10):
     x = x * 1.061
 
     #- pg C per m2 to pg C per km2
-    x = x * 10^6
+    x = x * 10**6
 
     #- pg C per km2 to kg of C per km2
-    x = x * 10^-15
+    x = x * 10**-15
 
     #total kg.C.per pixel
     #total kg of C per km2 * number of km2 per pixel 
-    total_kg_C_pixel = total_kg_C_km2 * grid_km**2
+    total_kg_C_pixel = x * grid_km**2
     
     return total_kg_C_pixel
 
@@ -146,13 +167,26 @@ def label_panel(ax, letter, xy=(0.04,0.93)):
 # ## Load GIS data
 
 # %% trusted=true
-gris_outline = gpd.read_file('/home/geoscience/nobackup_cassandra/L0data/gris_only_outline/greenland_icesheet_fix.shp')
+shp = gpd.read_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp')
+
+
+# %% trusted=true
+shp_simpl = shp.geometry.simplify(5000).buffer(0)
+
+# %% trusted=true
+shp_simpl.plot()
+
+# %% trusted=true
+shp_simpl.to_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_simplify5000_buffer0.shp')
+
+# %% trusted=true
+gris_outline = gpd.read_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp')
 gris_outline = gris_outline.to_crs(3413)
 
 # World land areas
-greenland = gpd.read_file('/home/geoscience/nobackup_cassandra/L0data/NaturalEarth/ne_10m_land/ne_10m_land.shp')
+greenland = gpd.read_file('/flash/tedstona/L0data/ne_10m_land/ne_10m_land.shp')
 # Crop world land areas to Greenland and surrounding areas
-bbox = gpd.read_file('/home/geoscience/nobackup_cassandra/L0data/greenland_region_bbox/greenland_area_bbox.shp').to_crs(3413)
+bbox = gpd.read_file('/flash/tedstona/L0data/greenland_area_bbox/greenland_area_bbox.shp').to_crs(3413)
 just_greenland = gpd.clip(greenland.to_crs(3413), bbox)
 
 # Manually isolate contiguous Greenland polygon from the main multi-polygon.
@@ -162,7 +196,15 @@ jgg_poly = list(jgg.geoms)[9]
 jgg_gdf = gpd.GeoDataFrame({'ix':[1,]}, geometry=[jgg_poly], crs=3413)
 
 # Surface elevation contours
-surf_contours = gpd.read_file(os.path.join('/home/geoscience/nobackup_cassandra/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500', 'contour.shp')).to_crs(3413)
+# Source of process: atedstone:paper_rlim_detection_repo/plot_map_decadal_change.py
+
+# shp : greenland_icesheet.shp from Horst, run through geopandas simplify and buffer operations
+# gdalwarp -cutline ../gris_only_outline/greenland_icesheet_simplify5000_buffer0.shp GimpIceMask_90m_v1.1_epsg3413.tif GimpIceMask_90m_v1.1_epsg3413_gris.tif
+# gdal_calc.py -A gimpdem_90m_v01.1_EPSG3413.tif -B ../GIMPMASK/GimpIceMask_90m_v1.1_epsg3413_gris.tif --calc=A*B --outfile=gimpdem_90m_v01.1_EPSG3413_grisonly.tif
+# gdal_fillnodata.py gimpdem_90m_v01.1_EPSG3413_grisonly.tif gimpdem_90m_v01.1_EPSG3413_grisonly_filled.tif
+# gdalwarp -tr 2000 2000 gimpdem_90m_v01.1_EPSG3413_grisonly_filled.tif gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif
+# gdal_contour -i 500 gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500 -f 'ESRI Shapefile' -a elev
+surf_contours = gpd.read_file(os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500', 'contour.shp')).to_crs(3413)
 
 # %% trusted=true
 # Open 'reference' MAR run, mainly for the ice sheet mask
@@ -249,6 +291,255 @@ yr_recent_coldest = 2022
 yr_recent_warmest = 2019
 
 # %% [markdown]
+# ### Sensitivity to snow depth
+
+# %% trusted=true
+regenerate = True
+if regenerate:
+    depths = [0.01, 0.05, 0.10, 0.2, 0.4, 0.8]
+    site_store = {}
+    gris_store = {}
+    for d in depths:
+        print(d)
+        sens_sd = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_SNOW, f'*_snow{d}.nc'))
+        gris_store[d] = sens_sd.cum_growth.where(mar.MSK > 50).where(sens_sd.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
+        v = sens_sd.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+        site_store[d] = v
+        
+    sd_gris = pd.DataFrame(gris_store)
+    sd_gris.to_csv(os.path.join(RESULTS, 'sens_snowdepth_time_series_gris.csv'))
+    
+    sd_site = pd.DataFrame(site_store)
+    sd_site.to_csv(os.path.join(RESULTS, 'sens_snowdepth_time_series_S6.csv'))
+else:
+    pass
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
+
+
+## snow depth
+
+# S6
+
+sd_site[str(year_coldest)].plot(
+    ax=axes[0,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,0].set_title('S6')
+
+sd_site[str(year_warmest)].plot(
+    ax=axes[1,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+# Ice sheet wide
+
+sd_gris[str(year_coldest)].plot(
+    ax=axes[0,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,1].set_title('Ice Sheet')
+
+sd_gris[str(year_warmest)].plot(
+    ax=axes[1,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+
+handles, labels = axes[1,1].get_legend_handles_labels()
+axes[1,1].legend(
+    loc=(1.05,0.05), 
+    frameon=False, 
+    handlelength=1
+)
+
+
+
+for ax in axes.flatten():
+    ax.set_ylim(0, 130000)
+    ax.set_xlabel('')
+
+plt.subplots_adjust(hspace=0.4)
+sns.despine()
+
+plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_snowdepth.pdf'), bbox_inches='tight')
+
+# %% [markdown]
+# ### Sensitivity to light
+
+# %% trusted=true
+regenerate = True
+if regenerate:
+    lights = [1, 10, 100, 200]
+    site_store = {}
+    gris_store = {}
+    for li in lights:
+        print(li)
+        sens_li = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_LIGH, f'*_light{li}.nc'))
+        gris_store[li] = sens_li.cum_growth.where(mar.MSK > 50).where(sens_li.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
+        v = sens_li.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+        site_store[li] = v
+        
+    li_gris = pd.DataFrame(gris_store)
+    li_gris.to_csv(os.path.join(RESULTS, 'sens_light_time_series_gris.csv'))
+    
+    li_site = pd.DataFrame(site_store)
+    li_site.to_csv(os.path.join(RESULTS, 'sens_light_time_series_S6.csv'))
+else:
+    pass
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
+
+
+## snow depth
+
+# S6
+
+li_site[str(year_coldest)].plot(
+    ax=axes[0,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,0].set_title('S6')
+
+li_site[str(year_warmest)].plot(
+    ax=axes[1,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+# Ice sheet wide
+
+li_gris[str(year_coldest)].plot(
+    ax=axes[0,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,1].set_title('Ice Sheet')
+
+li_gris[str(year_warmest)].plot(
+    ax=axes[1,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+
+handles, labels = axes[1,1].get_legend_handles_labels()
+axes[1,1].legend(
+    loc=(1.05,0.05), 
+    frameon=False, 
+    handlelength=1
+)
+
+
+
+for ax in axes.flatten():
+    ax.set_ylim(0, 130000)
+    ax.set_xlabel('')
+
+plt.subplots_adjust(hspace=0.4)
+sns.despine()
+
+plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_light.pdf'), bbox_inches='tight')
+
+# %% [markdown]
+# ### Sensitivity to temperature
+
+# %% trusted=true
+regenerate = True
+if regenerate:
+    temps = [0, 0.25, 0.5, 1.0]
+    site_store = {}
+    gris_store = {}
+    for t in temps:
+        print(t)
+        sens_t = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_TEMP, f'*_temp{t}.nc'))
+        gris_store[t] = sens_t.cum_growth.where(mar.MSK > 50).where(sens_t.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
+        v = sens_t.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+        site_store[t] = v
+        
+    t_gris = pd.DataFrame(gris_store)
+    t_gris.to_csv(os.path.join(RESULTS, 'sens_surft_time_series_gris.csv'))
+    
+    t_site = pd.DataFrame(site_store)
+    t_site.to_csv(os.path.join(RESULTS, 'sens_surft_time_series_S6.csv'))
+else:
+    pass
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
+
+
+## temperature
+
+# S6
+
+t_site[str(year_coldest)].plot(
+    ax=axes[0,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,0].set_title('S6')
+
+t_site[str(year_warmest)].plot(
+    ax=axes[1,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+# Ice sheet wide
+
+t_gris[str(year_coldest)].plot(
+    ax=axes[0,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,1].set_title('Ice Sheet')
+
+t_gris[str(year_warmest)].plot(
+    ax=axes[1,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+
+handles, labels = axes[1,1].get_legend_handles_labels()
+axes[1,1].legend(
+    loc=(1.05,0.05), 
+    frameon=False, 
+    handlelength=1
+)
+
+
+
+for ax in axes.flatten():
+    ax.set_ylim(0, 130000)
+    ax.set_xlabel('')
+
+plt.subplots_adjust(hspace=0.4)
+sns.despine()
+
+plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_temperature.pdf'), bbox_inches='tight')
+
+# %% [markdown]
 # ### Sensitivity to starting biomass term
 
 # %% trusted=true
@@ -286,6 +577,9 @@ for ib in ibio:
     site_store[ib] = v
 ibio_max = pd.DataFrame(store)
 ibio_s6 = pd.DataFrame(site_store)
+
+# %% trusted=true
+sens_ibio
 
 # %% trusted=true
 # Ice-sheet-wide bloom time series
@@ -368,10 +662,11 @@ if regenerate:
     gris_store = {}
     for pl in ploss:
         print(pl)
-        sens_ploss = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
-        sens_ploss['x'] = mar.x
-        sens_ploss['y'] = mar.y
-        gris_store[pl] = sens_ploss.cum_growth.where(mar.MSK > 50).where(sens_ploss.cum_growth > ib).median(dim=('x','y')).to_pandas()
+        # sens_ploss = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
+        # sens_ploss['x'] = mar.x
+        # sens_ploss['y'] = mar.y
+        sens_ploss = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
+        gris_store[pl] = sens_ploss.cum_growth.where(mar.MSK > 50).where(sens_ploss.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
         v = sens_ploss.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
         site_store[pl] = v
         
@@ -552,8 +847,8 @@ totals
 # Calculate metrics
 valid_growth = main_outputs.cum_growth.where(main_outputs.TIME.dt.dayofyear <= last_prod_doy).where(main_outputs.cum_growth > START_POP).where(mar.MSK > 50)
 annual_g_sum = valid_growth.resample(TIME='1AS').sum(dim='TIME')
-annual_g_sum = annual_g_sum.where(annual_g_sum > 0)
-annual_g_max = valid_growth.resample(TIME='1AS').max(dim='TIME')
+annual_g_sum = annual_g_sum.where(annual_g_sum > 0).compute()
+annual_g_max = valid_growth.resample(TIME='1AS').max(dim='TIME').compute()
 
 
 # %% trusted=true
@@ -563,7 +858,7 @@ annual_g_max = valid_growth.resample(TIME='1AS').max(dim='TIME')
 
 # %% trusted=true
 def plot_contours(ax):
-    dem = gu.Raster(os.path.join('/home/geoscience/nobackup_cassandra/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif'))
+    dem = gu.Raster(os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif'))
     x,y = dem.coords()
     CS = ax.contour(x, y, 
                 dem.data, 
@@ -585,46 +880,47 @@ fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4*1.2,6*1.2), subplot_kw={'p
 
 cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
 
-def plot_base(ax):
+def plot_base(ax, contours=True):
     jgg_gdf.plot(ax=ax, color='#CDB380', edgecolor='none', alpha=1, zorder=1)
     gris_outline.plot(ax=ax, color='whitesmoke', edgecolor='none', alpha=1, zorder=2)
-    plot_contours(ax)
+    if contours:
+        plot_contours(ax)
     #surf_contours.plot(ax=ax, edgecolor='#c2c2c2', linewidth=0.7, zorder=150, alpha=0.5)
     ax.axis('off')
     
 plt.subplots_adjust(wspace=0, hspace=0)
 
 # Sums
-norm = colors.LogNorm(vmin=179, vmax=2.5e6)
-kws = dict(norm=norm, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
-annual_g_sum.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws)
+norm_sum = colors.LogNorm(vmin=179, vmax=2.5e6)
+kws_sum = dict(norm=norm_sum, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
+annual_g_sum.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws_sum)
 axes[0,0].set_title('2019')
 label_panel(axes[0,0], 'a')
 
-annual_g_sum.sel(TIME='2022').rio.clip(basins.geometry.values).plot(ax=axes[0,1], **kws)
+annual_g_sum.sel(TIME='2022').rio.clip(basins.geometry.values).plot(ax=axes[0,1], **kws_sum)
 axes[0,1].set_title('2022')
 label_panel(axes[0,1], 'b')
 
 from matplotlib import cm
 cbar_sum = fig.add_axes((0.9, 0.55, 0.04, 0.3))
-cbar_kws = {'label':'Total biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
-plt.colorbar(mappable=cm.ScalarMappable(norm=norm, cmap=cmap), cax=cbar_sum, **cbar_kws)
+cbar_sum_kws = {'label':'Total biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
+plt.colorbar(mappable=cm.ScalarMappable(norm=norm_sum, cmap=cmap), cax=cbar_sum, **cbar_sum_kws)
 
 
 # Maxes
-norm = colors.Normalize(vmin=0, vmax=30000)
-kws = dict(norm=norm, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
-annual_g_max.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[1,0], **kws)
+norm_max = colors.Normalize(vmin=0, vmax=30000)
+kws_max = dict(norm=norm_max, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
+annual_g_max.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[1,0], **kws_max)
 axes[1,0].set_title('')
 label_panel(axes[1,0], 'c')
 
-annual_g_max.sel(TIME='2022').rio.clip(basins.geometry.values).plot(ax=axes[1,1], **kws)
+annual_g_max.sel(TIME='2022').rio.clip(basins.geometry.values).plot(ax=axes[1,1], **kws_max)
 axes[1,1].set_title('')
 label_panel(axes[1,1], 'd')
 
 cbar_max = fig.add_axes((0.9, 0.15, 0.04, 0.3))
-cbar_kws={'label':'Max. biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
-plt.colorbar(mappable=cm.ScalarMappable(norm=norm, cmap=cmap), cax=cbar_max, **cbar_kws)
+cbar_max_kws={'label':'Max. biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
+plt.colorbar(mappable=cm.ScalarMappable(norm=norm_max, cmap=cmap), cax=cbar_max, **cbar_max_kws)
 
 
 for ax in axes.flatten():
@@ -635,9 +931,44 @@ plt.savefig(os.path.join(RESULTS, 'fig_map_sum_max_2019_2022.pdf'), dpi=300, bbo
 ## To do -add scale bar
 
 # %% [markdown]
+# ### Supplementary Figure: annual bloom extent
+#
+# This Figure takes plotting styles directly from previous section
+
+# %% trusted=true
+# annual_g_max.plot?
+
+# %% trusted=true
+fg = annual_g_max.rio.clip(basins.geometry.values).plot(figsize=(6,9), col='TIME', col_wrap=5, subplot_kws={'projection':crs}, **kws_max)
+titles = np.arange(2000, 2023, 1)
+tn = 0
+for ax in fg.axs.flat:
+    #plot_base(ax, contours=False)
+    
+    ax.coastlines(color='grey', linewidth=0.5)
+    ax.set_extent([-56, -31, 57, 84], crs=ccrs.PlateCarree())
+    ax.axis('off')
+
+    ax.set_title(titles[tn])
+    if tn == len(titles)-1:
+        break
+    tn+=1
+    
+cbar_max = fg.fig.add_axes((0.7, 0.05, 0.03, 0.15))
+cbar_max_kws={'label':'Max. biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
+plt.colorbar(mappable=cm.ScalarMappable(norm=norm_max, cmap=cmap), cax=cbar_max, **cbar_max_kws)
+
+plt.subplots_adjust(hspace=0.05)
+# Saving is not currently working, kernel dying. Too much memory consumed by figure?
+plt.savefig(os.path.join(RESULTS, 'fig_suppl_annual_bloom_max.pdf'), dpi=300, bbox_inches='tight')    
+
+
+# %% [markdown]
 # ### Sector-by-sector analysis
 #
 # Need to normalise by area. The max approach doesn't do this, because in areas like the SW with bigger blooms, the boxplots of max get 'depressed' - even though the sample size is much bigger.
+
+# %%
 
 # %% trusted=true
 basins
@@ -723,13 +1054,10 @@ for sector in store:
     sns.despine()
 
 # %% [markdown]
-# ### Extent of blooms / % coverage of ice sheet by blooms
+# ### Extent of blooms / % coverage of ice sheet by blooms and trend analysis
 
 # %% trusted=true
-annual_biomass.plot.hist()
-
-# %% trusted=true
-annual_biomass.where(annual_biomass > 179).mean(dim='TIME').mean().compute()
+#annual_biomass.where(annual_biomass > 179).mean(dim='TIME').mean().compute()
 
 # %% trusted=true
 annual_biomass = main_outputs.cum_growth.where(mar.MSK > 50).where(main_outputs.cum_growth > 179).resample(TIME='1AS').sum(dim='TIME')
@@ -744,306 +1072,58 @@ plt.title('')
 plt.legend()
 plt.savefig(os.path.join(RESULTS, 'fig_bloom_percent_cover.pdf'), bbox_inches='tight')
 
-# %% [markdown]
-# ### Comparison with measured biomass population
-
-# %% [markdown]
-# #### Codify all available measurements 
-#
-# This section applies a consistent name for the biomass, allocates dates and coordinates, and applies appropriate averaging to each dataset.
+# %% trusted=true
+annual_biomass.plot.hist()
 
 # %% trusted=true
-RENAME_TO = 'biomass'
-
-
-# %% trusted=true
-# Based on https://gist.github.com/tsemerad/5053378
-# and https://gist.github.com/jeteon/89c41e4081d87b798d8006b16a52c695
-def dms_to_dd(d, m, s):
-    if d < 0:
-        sign = -1
-        d = np.abs(d)
-    else:
-        sign = 1
-    dd = sign * (d + float(m)/60 + float(s)/3600)
-    return dd
-
-
-# %% trusted=true
-# Import datasets
-csvs = glob(os.path.join(MEAS_BIO, '*.csv'))
-meas = {}
-for csv in csvs:
-    d = pd.read_csv(csv, parse_dates=True)
-    csv_name = csv.split('/')[-1][:-4]
-    meas[csv_name] = d
-    
-# Load Stibal separately - directly from their Excel Workbook
-meas['stibal_2017'] = pd.read_excel(os.path.join(MEAS_BIO, 'grl56634-sup-0002-2017gl075958_data_si.xlsx'), sheet_name='algal cells time series data')
-
-# %% trusted=true
-## South Greenland
-
-# chev provides date. Average all the sites on each day.
-bmc = 'ia.cells.ml'
-chev = meas['chevrollier_2022_2021_counts_south_gris'].groupby('date').mean()
-chev = chev.reset_index()
-chev['date'] = pd.to_datetime(chev['date'], dayfirst=True)
-chev = chev.rename({bmc:RENAME_TO}, axis='columns')
-chev['geom'] = pts_wgs84.loc['South'].geometry
-chev['site'] = 'South'
-chev['d_id'] = 'chev'
-chev['biomass_col'] = bmc
-
-# %% trusted=true
-## South East Greenland 
-
-# Halbach dataset
-bmc = 'av.cells.ml'
-halb = meas['halbach_2019_counts_se_greenland']
-# Taken from Halbach et al. (2022) Table S1
-halb_meta = {
-    'hei':  {'geom': Point((dms_to_dd(-38,26,50), dms_to_dd(65,59,35))), 'date':dt.datetime(2019, 7, 26)},
-    'mit1': {'geom': Point((dms_to_dd(-37,50, 2), dms_to_dd(65,41,39))), 'date':dt.datetime(2019, 7, 24)},
-    'mit3': {'geom': Point((dms_to_dd(-37,50,25), dms_to_dd(65,41,38))), 'date':dt.datetime(2019, 7, 24)}
-}
-halb = halb.rename({bmc:RENAME_TO}, axis='columns')
-halb = pd.merge(left=halb, right=pd.DataFrame(halb_meta).T, left_on='site', right_index=True)
-halb['d_id'] = 'halb'
-halb['biomass_col'] = bmc
-
-# Lutz Mittivakkat dataset does not provide exact dates, so force the mid-date of their campaign (6-23 July 2012)
-# All values were acquired within a 1 km2 area, so also okay to force a single coordinate.
-bmc = 'cells.ml'
-lutz = meas['lutz_2012_se_greenland']
-lutz = lutz.rename({'grey_ice_samples':'site', bmc:RENAME_TO}, axis='columns')
-lutz['date'] = dt.datetime(2012, 7, 6+(23-6))
-# Estimate the centre point of Lutz et al. (2014) Figure 1.
-lutz['geom'] = Point((-37.87, 65.685))
-lutz['d_id'] = 'lutz'
-lutz['site'] = 'mit'
-lutz['biomass_col'] = bmc
-
-# %%
-
-# %% trusted=true
-halb_meta
-
-# %% trusted=true
-## S6
-
-# stib provides date. Average all the samples on each day.
-# All Stibal values were acquired at S6 (see paper).
-bmc = 'cells/ml'
-stib = meas['stibal_2017'].filter(items=['doy 2014', bmc], axis='columns').dropna()
-stib['date'] = [dt.datetime.strptime(f'2014-{int(d)}', '%Y-%j') for d in stib['doy 2014']]
-stib = stib.groupby('date').mean().reset_index()
-stib['geom'] = pts_wgs84.loc['S6'].geometry
-stib = stib.rename({bmc:RENAME_TO}, axis='columns')
-stib = stib.drop(labels=['doy 2014'], axis='columns')
-stib['site'] = 'S6'
-stib['biomass_col'] = bmc
-stib['d_id'] = 'stib'
-
-
-# williamson 2016 @ S6 provides date
-bmc = 'overall.cells.per.ml'
-w16s6 = meas['williamson_2016_count_biomass_all_2016'].filter(items=['date', 'habitat', bmc], axis='columns').dropna()
-w16s6['date'] = [dt.datetime.strptime(d, '%d.%m.%y') for d in w16s6['date']]
-
-# Retain only the low, medium and high habitats
-w16s6 = w16s6[w16s6.habitat.isin(['l', 'm', 'h'])]
-# Then only keep days on which all three habitats were sampled.
-habs_check = w16s6.groupby(['date', 'habitat']).count()
-hc = habs_check.unstack()
-# On some days, only the high biomasss habitat was sampled. Only retain days on which all habitats were sampled.
-valid_days = hc[
-    (hc[('overall.cells.per.ml','h')] > 0) & 
-    (hc[('overall.cells.per.ml','l')] > 0) & 
-    (hc[('overall.cells.per.ml','m')] > 0)
-]
-w16s6 = w16s6[w16s6.date.isin(valid_days.index)]
-
-w16s6 = w16s6.groupby('date').mean().reset_index()
-w16s6['geom'] = pts_wgs84.loc['S6'].geometry
-w16s6 = w16s6.rename({bmc:RENAME_TO}, axis='columns')
-w16s6['d_id'] = 'w16_s6'
-w16s6['site'] = 'S6'
-w16s6['biomass_col'] = bmc
-
-# %% trusted=true
-stib
-
-# %% trusted=true
-stib
-
-# %% trusted=true
-## K-Transect
-
-# Williamson space for time 2016.
-# !!! check correct column is being used!
-bmc = 'my.count'
-w16k = meas['Williamson_dash_2016_space_for_time_counts'].filter(items=['date', 'habitat', bmc], axis='columns').dropna()
-w16k['date'] = [dt.datetime.strptime(d, '%d.%m.%y') for d in w16k['date']]
-# Calculate averages for each site on each date
-w16k = w16k.groupby(['habitat', 'date'])[bmc].mean().reset_index()
-
-# Attach spatial information through a merge
-# Coordinates taken from Williamson et al 2018 FEMS, matching to the 'habitat' names in the dataset.
-w16k_meta = {
-    'kanu': Point((-47.0154, 67.0003)),    # =S1a
-    's1':   Point((-47.5433, 67.0631)),    # =S1b
-    's2':   Point((-48.3064, 67.0571)),
-    's3':   Point((-48.8929, 67.0913)),
-    'h':    pts_wgs84.loc['S6'].geometry
-}
-w16k_meta = pd.Series(w16k_meta, name='geom')
-w16k = pd.merge(left=w16k, right=pd.Series(w16k_meta), left_on='habitat', right_index=True)
-
-w16k = w16k.rename({bmc:RENAME_TO, 'habitat':'site'}, axis='columns')
-w16k['d_id'] = 'w16_dash'
-w16k['biomass_col'] = bmc
-
-# %% trusted=true
-## Kanger margin
-
-# Based on Williamson et al. 2021 Frontiers: collected 8-10 August 2019, at Point 660.
-bmc = 'total_cells_ml'
-w21k = meas['Williamson_2021_sw_2019_algal_count'].filter(items=[bmc], axis='columns')
-w21k = w21k.mean()
-w21k['date'] = dt.datetime(2019, 8, 9)
-# Google Maps approx coordinate a few hundred metres inland of Pt 660
-w21k['geom'] = Point((-50.027204, 67.155493))
-w21k['d_id'] = 'w19_660'
-w21k = w21k.rename({bmc:RENAME_TO})
-w21k['site'] = 'P660'
-w21k['biomass_col'] = bmc
-w21k = pd.DataFrame(w21k).T
-
-# %% trusted=true
-## Upernavik
-
-# We already have coordinate. Check units? 
-bmc = 'cells.per.ml'
-upe = meas['williamson_2018_upe_u_cell_counts'].filter(items=[bmc], axis='columns')
-upe = upe.mean()
-upe['date'] = dt.datetime(2018, 7, 26)
-upe['geom'] = pts_wgs84.loc['UPE'].geometry
-upe = upe.rename({bmc:RENAME_TO})
-upe['site'] = 'UPE'
-upe['biomass_col'] = bmc
-upe['d_id'] = 'upe'
-upe = pd.DataFrame(upe).T
-
-# %% trusted=true
-## Join all datasets together
-
-measurements = pd.concat([
-#    chev, # removed - see note(1)
-    halb,
-    lutz,
-    stib,
-    w16s6,
-    w16k,
-#    w21k, # removed - see note(2)
-    upe
-], axis=0).reset_index()
-
-# %% [markdown]
-# *Note(1)* Chev. 2022, page 3: "The targeted surfaces were chosen to be roughly homogeneous on a wider surface in order to upscale the results for  1m2 areas, but are not representative of wider surfaces".
-#
-# *Note(2)* 2024-02-09: cells/ml in spreadsheet are one order of magnitude higher than all other datasets, suspect
-#
-
-# %% trusted=true
-# Clean the joined dataset
-measurements = measurements.drop(labels=['index'], axis='columns')
-measurements['biomass'] = pd.to_numeric(measurements['biomass'])
-
-# Convert to Polar Stereo to match MAR
-measurements = gpd.GeoDataFrame(measurements, geometry='geom', crs='epsg:4236')
-measurements = measurements.to_crs(3413)
-
-# %% trusted=true
-measurements
-
-# %% trusted=true
-measurements.to_file(os.path.join(RESULTS,'measurements_merged.gpkg'))
-
-# %% trusted=true
-#measurements.to_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'))
-
-# %% [markdown]
-# #### Compare measurements with modelled blooms
-
-# %% trusted=true
-#measurements = pd.read_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'), index_col=0)
-
-# %% trusted=true
-store = []
-for ix, row in measurements.iterrows():
-    v = main_outputs.cum_growth.sel(TIME=row['date']).sel(x=row['geom'].x, y=row['geom'].y, method='nearest')
-    store.append(float(v.values))
-
-# %% trusted=true
-measurements['modelled_biomass_dw'] = store
-
-# Convert measured values to DW
-measurements['biomass_dw'] = ww_to_dw(measurements['biomass'])
-
-# %% trusted=true
-# %matplotlib inline
-sns.scatterplot(
-    x=measurements['biomass_dw'], 
-    y=measurements['modelled_biomass_dw'],
-    style=measurements['site'],
-    hue=measurements['d_id'],
-    s=50
-)
-plt.grid()
-plt.xlim(0, 22000)
-plt.ylim(0, 22000)
-plt.xlabel(r'Measured biomass ng DW ml (wet$\times$0.84)')
-plt.ylabel('Modelled biomass ng DW ml')
-plt.legend(loc=(1.01,0))
-plt.title('Means of measured biomass, except Medians for Stibal')
-sns.despine()
-
-# %% trusted=true
-measurements[(measurements.site == 'S6') & (measurements.biomass_dw > 20000)]
-
-# %% trusted=true
-# %matplotlib widget
-fig, ax = plt.subplots()
-mar.MSK.plot(ax=ax)
-m = measurements[measurements.site == 'mit3']
-plt.plot(m.geom.x, m.geom.y, 'xr')
-
-# %% [markdown]
-# ### Is there a trend in annual bloom extent?
-
-# %% trusted=true
-((annual_biomass > 179).sum(dim=('x','y')) * 10**2).plot(marker='o')
-plt.ylabel('km2')
-plt.grid()
-
-# %% trusted=true
-
 y = as_perc.to_pandas()
 X = sm.add_constant(np.arange(0, len(y)))
 m = sm.OLS(y, X)
 r = m.fit()
 print(r.summary())
 
-# %% trusted=true
-150*270
+# %% [markdown]
+# ### GrIS wide min and max bloom productivity statistics
 
 # %% trusted=true
-annual_biomass = main_outputs.cum_growth.where(main_outputs.TIME.dt.dayofyear <= last_prod_doy).where(main_outputs.cum_growth > 179).where(mar.MSK > 50).resample(TIME='1AS').sum(dim='TIME')
-anuual_area = annual_biomass.where(annual_biomass > 179).count(dim=('x','y'))
+annual_g_sum_griswide = annual_g_sum.sum(dim=('x','y'))
 
 # %% trusted=true
-anuual_area.plot()
+annual_g_sum_griswide.idxmin()
+
+# %% trusted=true
+annual_g_sum_griswide.min()
+
+# %% trusted=true
+annual_g_sum_griswide.idxmax()
+
+# %% trusted=true
+annual_g_sum_griswide.max()
+
+# %% [markdown]
+# ### Organic carbon production potential
+
+# %% trusted=true
+# Annual total C ...
+# Need to mask by last productive day?
+carbon = to_carbon(annual_g_sum)
+total_carbon = carbon.sum(dim=('x','y')).compute()
+
+
+# %% trusted=true
+total_carbon
+
+# %% trusted=true
+total_carbon.min()
+
+# %% trusted=true
+total_carbon.idxmin()
+
+# %% trusted=true
+total_carbon.max()
+
+# %% trusted=true
+total_carbon.idxmax()
 
 # %% [markdown]
 # ## UPE: Compare MAR with PROMICE

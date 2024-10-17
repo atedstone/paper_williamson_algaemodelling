@@ -36,6 +36,16 @@ inputs_path = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year
 mar_example = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
 output_path = '/flash/tedstona/williamson/outputs/'
 
+# netcdf output compression options
+# cum growth: float64, up to c. 30,000.
+# today_prod: float64, up to c. 3,000.
+# productive hours: currently int64. range 0-24
+encoding = {
+    'cum_growth':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
+    'today_prod':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
+    'daily_prod_hrs': {'dtype': 'int8',  'scale_factor': 1, '_FillValue': -9999} 
+}
+
 # %% trusted=true
 import numpy as np
 import pandas as pd
@@ -45,17 +55,6 @@ import xarray as xr
 import rioxarray
 from copy import deepcopy
 import os
-
-def carbon_func_106pg(x):
-    x = x / 0.84  # assuming 0.84 ng DW per cell
-    x = x * 106  # convert from cells per ml to pg C ml assuming 106 pg C per cell
-    x = x * 1000  # pg C ml to pg C per L
-    x = x * 1.061  # pg C per l to pg C per m2 using conversion from Williamson et al. 2018
-    x = x * 10 ** 6  # pg C per m2 to pg C per km2
-    x = x * 10 ** -15  # pg C per km2 to kg of C per km2
-    total_kg_C_km2 = np.sum(x)
-    total_kg_C_pixel = total_kg_C_km2 * 100  # assuming pixels = 10 * 10 km = 100 km2
-    return {'total_kg_C_km2': total_kg_C_km2, 'total_kg_C_pixel': total_kg_C_pixel}
 
 
 def daily_prod(x):
@@ -104,7 +103,7 @@ def prepare_model_inputs(
 from dask_jobqueue import SLURMCluster as MyCluster
 from dask.distributed import Client
 cluster = MyCluster()
-cluster.scale(jobs=4)
+cluster.scale(jobs=6)
 client = Client(cluster)
 
 # %% trusted=true
@@ -178,29 +177,102 @@ for year in range(2000, 2023):
     cg, dp = run_model_annual(hours, bio, pl)
 
     full_out = xr.merge([hours, cg, dp])
-    full_out.to_netcdf(os.path.join(output_path, 'main_outputs', f'model_outputs_{year}_ibio{initial_bio}_ploss{pl}.nc'))
+    full_out.to_netcdf(
+        os.path.join(output_path, 'main_outputs', f'model_outputs_{year}_ibio{initial_bio}_ploss{pl}.nc'),
+        encoding=encoding
+    )
 
 # %% trusted=true
-# SENSITIVITY RUNS
+# ENVIRONMENTAL SENSITIVITY RUNS
+
+years = [2000, 2012]
+initial_bio = 179
+default_ploss = 0.10
+
+# To snow
+snow_depths = [0.01, 0.05, 0.10, 0.20, 0.40, 0.80]
+for year in years:
+    print(year)
+    pth = inputs_path.format(year=year)
+    for d in snow_depths:
+        hours = prepare_model_inputs(pth, snow_thres=d)    
+        
+        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+        cg, dp = run_model_annual(hours, bio, default_ploss)
+
+        full_out = xr.merge([hours, cg, dp])
+        full_out.to_netcdf(
+            os.path.join(output_path, 'sensitivity_snowdepth', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_snow{d}.nc'),
+            encoding=encoding
+        )
+        
+
+# Sensitivity to near-surface temperature (0-1 c)
+temps = [0, 0.25, 0.5, 1.0]
+for year in years:
+    print(year)
+    pth = inputs_path.format(year=year)
+    for t in temps:
+        hours = prepare_model_inputs(pth, temp_thres=t)    
+        
+        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+        cg, dp = run_model_annual(hours, bio, default_ploss)
+
+        full_out = xr.merge([hours, cg, dp])
+        full_out.to_netcdf(
+            os.path.join(output_path, 'sensitivity_temp', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_temp{t}.nc'),
+            encoding=encoding
+        )
+
+
+# To light
+lights = [1, 10, 100, 200]
+for year in years:
+    print(year)
+    pth = inputs_path.format(year=year)
+    for li in lights:
+        hours = prepare_model_inputs(pth, light_thres=li)    
+        
+        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+        cg, dp = run_model_annual(hours, bio, default_ploss)
+
+        full_out = xr.merge([hours, cg, dp])
+        full_out.to_netcdf(
+            os.path.join(output_path, 'sensitivity_light', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_light{li}.nc'),
+            encoding=encoding
+        )
+
+
+
+# %% trusted=true
+# PHENOLOGICAL SENSITIVITY RUNS
 
 initial_bio = 179
+default_ploss = 0.10
 ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
 ibio = [initial_bio*0.1, initial_bio, initial_bio*5, initial_bio*10]
 
+# Sensitivity to population loss
 for year in range(2000, 2023):
     print(year)
     pth = inputs_path.format(year=year)
     hours = prepare_model_inputs(pth)
     for pl in ploss:
         
-        bio = xr.DataArray(179, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
         cg, dp = run_model_annual(hours, bio, pl)
 
         full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ploss', f'model_outputs_{year}_ibio179_ploss{pl}.nc'))
+        full_out.to_netcdf(
+            os.path.join(output_path, 'sensitivity_ploss', f'model_outputs_{year}_ibio179_ploss{pl}.nc'),
+            encoding=encoding
+        )
         
-
+# Sensitivity to starting biomass
 for year in range(2000, 2023):
     print(year)
     pth = inputs_path.format(year=year)
@@ -209,10 +281,12 @@ for year in range(2000, 2023):
 
         bio = xr.DataArray(ib, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-        cg, dp = run_model_annual(hours, bio, 0.10)
+        cg, dp = run_model_annual(hours, bio, default_ploss)
 
         full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ibio', f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'))
+        full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ibio', f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'),
+                          encoding=encoding
+        )
 
 # %% trusted=true
 ibio
