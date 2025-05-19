@@ -234,6 +234,9 @@ if __name__ == '__main__':
         full_out.attrs['param_sd'] = sd
         full_out.attrs['param_ploss'] = ploss
         full_out.attrs['param_startpop'] = initial_bio
+
+        comp = dict(zlib=True, complevel=5)
+        encoding = {var: comp for var in full_out.data_vars}
         
         full_out.to_netcdf(
             os.path.join(output_path, '2025-05', f'model_outputs_{year}_exp{i}.nc'),
