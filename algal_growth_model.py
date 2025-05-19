@@ -1,20 +1,3 @@
-# ---
-# jupyter:
-#   jupytext:
-#     cell_metadata_filter: all
-#     formats: ipynb,py:percent
-#     notebook_metadata_filter: all,-language_info
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.16.4
-#   kernelspec:
-#     display_name: Python 3 (ipykernel)
-#     language: python
-#     name: python3
-# ---
-
 # %% [markdown]
 # # Algal Growth Model - Python version
 #
@@ -27,12 +10,18 @@
 # Exports to NetCDFs with same basic dimensions as MAR inputs.
 
 # %% trusted=true
-# local
-#inputs_path = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
-#mar_example = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
-#output_path = '/scratch/williamson/2025-04/'
-#from dask.distributed import LocalCluster as MyCluster
+import numpy as np
+import pandas as pd
+from datetime import datetime
 
+import xarray as xr
+import rioxarray
+from copy import deepcopy
+import os
+
+from scipy.stats import qmc
+
+# %% trusted=true
 # octopus
 inputs_path = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
 mar_example = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
@@ -49,36 +38,14 @@ from dask.distributed import LocalCluster as MyCluster
 # cum growth: float64, up to c. 30,000.
 # today_prod: float64, up to c. 3,000.
 # productive hours: currently int64. range 0-24
-encoding = {
-    'cum_growth':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
-    'today_prod':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
-    'daily_prod_hrs': {'dtype': 'int8',  'scale_factor': 1, '_FillValue': -9999} 
-}
+# encoding = {
+#     'cum_growth':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
+#     'today_prod':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
+#     'daily_prod_hrs': {'dtype': 'int8',  'scale_factor': 1, '_FillValue': -9999} 
+# }
+
 
 # %% trusted=true
-
-
-cluster = MyCluster()
-
-#cluster.scale(jobs=6)
-cluster.scale(n=10)
-from dask.distributed import Client
-client = Client(cluster)
-
-# %% trusted=true
-client
-
-# %% trusted=true
-import numpy as np
-import pandas as pd
-from datetime import datetime
-
-import xarray as xr
-import rioxarray
-from copy import deepcopy
-import os
-
-
 def daily_prod(x):
     return 2936.966 / (1 + ((2936.966 - 796.239) / 796.239) * np.exp(-0.000232 * x))
 
@@ -120,8 +87,6 @@ def prepare_model_inputs(
     return daily
 
 
-
-# %% trusted=true
 def run_model_annual(prod_hrs, initial_bio, percent_loss):
     
     bio = deepcopy(initial_bio)
@@ -167,22 +132,6 @@ def run_model_annual(prod_hrs, initial_bio, percent_loss):
     return (cum_growth, daily_production)
 
 
-# %% trusted=true
-mar = xr.open_dataset(mar_example)
-mar = mar.rename({'Y19_288':'y', 'X14_163':'x'})
-mar = mar.rio.write_crs('epsg:3413')
-
-# %% [markdown]
-# ## Monte Carlo simulation
-
-# %% trusted=true
-#pt_s6_x = -2507730
-#pt_s6_y = -193438
-
-# %% trusted=true
-# Quasi Monte Carlo
-from scipy.stats import qmc
-
 # Inverse cumulative distribution function for the triangular distribution
 def icdf(sample, a, c, b):
     """
@@ -200,208 +149,232 @@ def icdf(sample, a, c, b):
     return x_values
 
 
-# %% trusted=true
-engine = qmc.Sobol(d=4)
-qmc_vals = engine.random(512)
+if __name__ == '__main__':
+    cluster = MyCluster()
 
-# %% trusted=true
-qmc.discrepancy(qmc_vals)
+    #cluster.scale(jobs=6)
+    cluster.scale(n=10)
+    from dask.distributed import Client
+    client = Client(cluster)
 
-# %% trusted=true
-# Specify the triangular distributions of each variable
-# (min, mode, max)
-# These values directly define the shape of the PDF.
+    # %% trusted=true
+    client
+    # %% trusted=true
+    mar = xr.open_dataset(mar_example)
+    mar = mar.rename({'Y19_288':'y', 'X14_163':'x'})
+    mar = mar.rio.write_crs('epsg:3413')
 
-# Threshold air temperature above which algae can bloom (degrees C)
-dist_t = (0.0, 0.5, 1.0)
-# Maximum snow depth below which ice algae can bloom (metres)
-dist_sd = (0.0, 0.05, 0.5)
-# SWD above which algae can bloom
-# N.b. Proxy for PAR. 50 Wm-2 is roughly 100 umol (1 W --> 2 mmol)
-dist_swd = (25, 50, 100)
-# Daily population loss term (proportion 0-->1)
-dist_ploss = (0.05, 0.10, 0.15)
 
-# %% trusted=true
-# Transform the QMC to the experiment parameters using the specified distibutions
-exps_t = icdf(qmc_vals[:,0], *dist_t)
-exps_sd = icdf(qmc_vals[:,1], *dist_sd)
-exps_swd = icdf(qmc_vals[:,2], *dist_swd)
-exps_ploss = icdf(qmc_vals[:,3], *dist_ploss)
+    # %% trusted=true
+    #pt_s6_x = -2507730
+    #pt_s6_y = -193438
 
-# %% trusted=true
-# Run for a single point, a bunch of single points, or the entire grid?
+    initial_bio = 179
+    year = 2012
 
-initial_bio = 179
-year = 2012
+    # %% trusted=true
+    engine = qmc.Sobol(d=4)
+    qmc_vals = engine.random(512)
 
-i = 1
-for t, sd, swd, ploss in zip(exps_t, exps_sd, exps_swd, exps_ploss):
-    print(f'Experiment {i}')
-    pth = inputs_path.format(year=year)
-    
-    hours = prepare_model_inputs(
-        pth,
-        light_thres=swd,
-        temp_thres=t,
-        snow_thres=sd
-    )
+    # %% trusted=true
+    #qmc.discrepancy(qmc_vals)
 
-    # Subset to a specified point only
-    # hours = hours.sel(x=pt_s6_x, y=pt_s6_y, method='nearest')
-    
-    bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+    # %% trusted=true
+    # Specify the triangular distributions of each variable
+    # (min, mode, max)
+    # These values directly define the shape of the PDF.
 
-    cg, dp = run_model_annual(hours, bio, ploss)
+    # Threshold air temperature above which algae can bloom (degrees C)
+    dist_t = (0.0, 0.5, 1.0)
+    # Maximum snow depth below which ice algae can bloom (metres)
+    dist_sd = (0.0, 0.05, 0.5)
+    # SWD above which algae can bloom
+    # N.b. Proxy for PAR. 50 Wm-2 is roughly 100 umol (1 W --> 2 mmol)
+    dist_swd = (25, 50, 100)
+    # Daily population loss term (proportion 0-->1)
+    dist_ploss = (0.05, 0.10, 0.15)
 
-    full_out = xr.merge([hours, cg, dp])
+    # %% trusted=true
+    # Transform the QMC to the experiment parameters using the specified distibutions
+    exps_t = icdf(qmc_vals[:,0], *dist_t)
+    exps_sd = icdf(qmc_vals[:,1], *dist_sd)
+    exps_swd = icdf(qmc_vals[:,2], *dist_swd)
+    exps_ploss = icdf(qmc_vals[:,3], *dist_ploss)
 
-    full_out['attrs']['param_swd'] = swd
-    full_out['attrs']['param_t'] = t
-    full_out['attrs']['param_sd'] = sd
-    full_out['attrs']['param_ploss'] = ploss
-    full_out['attrs']['param_startpop'] = initial_ibio
-    
-    full_out.to_netcdf(
-        os.path.join(output_path, '2025-05', f'model_outputs_{year}_exp{i}.nc'),
-        encoding=encoding
-    )
-    i += 1
+    exps_pd = pd.DataFrame({'T_celsius':exps_t, 'snow_depth_metres':exps_sd, 'SWd_wm2':exps_swd, 'ploss':exps_ploss})
+    exps_pd.index += 1
+    exps_pd.to_csv(os.path.join(output_path, 'expt_parameters_{year}_ibio{initial_bio}.csv'))
 
-# %% [markdown]
-# ## Code from before 04/2025 below...
+    # %% trusted=true
+    # Run for a single point, a bunch of single points, or the entire grid?
 
-# %% trusted=true
-# MAIN MODEL RUN
+    i = 1
+    for t, sd, swd, ploss in zip(exps_t, exps_sd, exps_swd, exps_ploss):
+        print(f'Experiment {i}')
+        pth = inputs_path.format(year=year)
+        
+        hours = prepare_model_inputs(
+            pth,
+            light_thres=swd,
+            temp_thres=t,
+            snow_thres=sd
+        )
 
-initial_bio = 179
-pl = 0.1
-
-for year in range(2000, 2023):
-    print(year)
-    pth = inputs_path.format(year=year)
-    hours = prepare_model_inputs(pth)
-    
-    bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
-
-    cg, dp = run_model_annual(hours, bio, pl)
-
-    full_out = xr.merge([hours, cg, dp])
-    full_out.to_netcdf(
-        os.path.join(output_path, 'main_outputs', f'model_outputs_{year}_ibio{initial_bio}_ploss{pl}.nc'),
-        encoding=encoding
-    )
-
-# %% trusted=true
-# ENVIRONMENTAL SENSITIVITY RUNS
-
-years = [2000, 2012]
-initial_bio = 179
-default_ploss = 0.10
-
-# To snow
-snow_depths = [0.01, 0.05, 0.10, 0.20, 0.40, 0.80]
-for year in years:
-    print(year)
-    pth = inputs_path.format(year=year)
-    for d in snow_depths:
-        hours = prepare_model_inputs(pth, snow_thres=d)    
+        # Subset to a specified point only
+        # hours = hours.sel(x=pt_s6_x, y=pt_s6_y, method='nearest')
         
         bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-        cg, dp = run_model_annual(hours, bio, default_ploss)
+        cg, dp = run_model_annual(hours, bio, ploss)
 
         full_out = xr.merge([hours, cg, dp])
+
+        full_out.attrs['param_swd'] = swd
+        full_out.attrs['param_t'] = t
+        full_out.attrs['param_sd'] = sd
+        full_out.attrs['param_ploss'] = ploss
+        full_out.attrs['param_startpop'] = initial_bio
+        
         full_out.to_netcdf(
-            os.path.join(output_path, 'sensitivity_snowdepth', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_snow{d}.nc'),
+            os.path.join(output_path, '2025-05', f'model_outputs_{year}_exp{i}.nc'),
             encoding=encoding
         )
+        i += 1
+
+# # %% [markdown]
+# # ## Code from before 04/2025 below...
+
+# # %% trusted=true
+# # MAIN MODEL RUN
+
+# initial_bio = 179
+# pl = 0.1
+
+# for year in range(2000, 2023):
+#     print(year)
+#     pth = inputs_path.format(year=year)
+#     hours = prepare_model_inputs(pth)
+    
+#     bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+#     cg, dp = run_model_annual(hours, bio, pl)
+
+#     full_out = xr.merge([hours, cg, dp])
+#     full_out.to_netcdf(
+#         os.path.join(output_path, 'main_outputs', f'model_outputs_{year}_ibio{initial_bio}_ploss{pl}.nc'),
+#         encoding=encoding
+#     )
+
+# # %% trusted=true
+# # ENVIRONMENTAL SENSITIVITY RUNS
+
+# years = [2000, 2012]
+# initial_bio = 179
+# default_ploss = 0.10
+
+# # To snow
+# snow_depths = [0.01, 0.05, 0.10, 0.20, 0.40, 0.80]
+# for year in years:
+#     print(year)
+#     pth = inputs_path.format(year=year)
+#     for d in snow_depths:
+#         hours = prepare_model_inputs(pth, snow_thres=d)    
+        
+#         bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+#         cg, dp = run_model_annual(hours, bio, default_ploss)
+
+#         full_out = xr.merge([hours, cg, dp])
+#         full_out.to_netcdf(
+#             os.path.join(output_path, 'sensitivity_snowdepth', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_snow{d}.nc'),
+#             encoding=encoding
+#         )
         
 
-# Sensitivity to near-surface temperature (0-1 c)
-temps = [0, 0.25, 0.5, 1.0]
-for year in years:
-    print(year)
-    pth = inputs_path.format(year=year)
-    for t in temps:
-        hours = prepare_model_inputs(pth, temp_thres=t)    
+# # Sensitivity to near-surface temperature (0-1 c)
+# temps = [0, 0.25, 0.5, 1.0]
+# for year in years:
+#     print(year)
+#     pth = inputs_path.format(year=year)
+#     for t in temps:
+#         hours = prepare_model_inputs(pth, temp_thres=t)    
         
-        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+#         bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-        cg, dp = run_model_annual(hours, bio, default_ploss)
+#         cg, dp = run_model_annual(hours, bio, default_ploss)
 
-        full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(
-            os.path.join(output_path, 'sensitivity_temp', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_temp{t}.nc'),
-            encoding=encoding
-        )
+#         full_out = xr.merge([hours, cg, dp])
+#         full_out.to_netcdf(
+#             os.path.join(output_path, 'sensitivity_temp', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_temp{t}.nc'),
+#             encoding=encoding
+#         )
 
 
-# To light
-lights = [1, 10, 100, 200]
-for year in years:
-    print(year)
-    pth = inputs_path.format(year=year)
-    for li in lights:
-        hours = prepare_model_inputs(pth, light_thres=li)    
+# # To light
+# lights = [1, 10, 100, 200]
+# for year in years:
+#     print(year)
+#     pth = inputs_path.format(year=year)
+#     for li in lights:
+#         hours = prepare_model_inputs(pth, light_thres=li)    
         
-        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+#         bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-        cg, dp = run_model_annual(hours, bio, default_ploss)
+#         cg, dp = run_model_annual(hours, bio, default_ploss)
 
-        full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(
-            os.path.join(output_path, 'sensitivity_light', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_light{li}.nc'),
-            encoding=encoding
-        )
+#         full_out = xr.merge([hours, cg, dp])
+#         full_out.to_netcdf(
+#             os.path.join(output_path, 'sensitivity_light', f'model_outputs_{year}_ibio{initial_bio}_ploss{default_ploss}_light{li}.nc'),
+#             encoding=encoding
+#         )
 
 
 
-# %% trusted=true
-# PHENOLOGICAL SENSITIVITY RUNS
+# # %% trusted=true
+# # PHENOLOGICAL SENSITIVITY RUNS
 
-initial_bio = 179
-default_ploss = 0.10
-ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
-ibio = [initial_bio*0.1, initial_bio, initial_bio*5, initial_bio*10]
+# initial_bio = 179
+# default_ploss = 0.10
+# ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
+# ibio = [initial_bio*0.1, initial_bio, initial_bio*5, initial_bio*10]
 
-# Sensitivity to population loss
-for year in range(2000, 2023):
-    print(year)
-    pth = inputs_path.format(year=year)
-    hours = prepare_model_inputs(pth)
-    for pl in ploss:
+# # Sensitivity to population loss
+# for year in range(2000, 2023):
+#     print(year)
+#     pth = inputs_path.format(year=year)
+#     hours = prepare_model_inputs(pth)
+#     for pl in ploss:
         
-        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+#         bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-        cg, dp = run_model_annual(hours, bio, pl)
+#         cg, dp = run_model_annual(hours, bio, pl)
 
-        full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(
-            os.path.join(output_path, 'sensitivity_ploss', f'model_outputs_{year}_ibio179_ploss{pl}.nc'),
-            encoding=encoding
-        )
+#         full_out = xr.merge([hours, cg, dp])
+#         full_out.to_netcdf(
+#             os.path.join(output_path, 'sensitivity_ploss', f'model_outputs_{year}_ibio179_ploss{pl}.nc'),
+#             encoding=encoding
+#         )
         
-# Sensitivity to starting biomass
-for year in range(2000, 2023):
-    print(year)
-    pth = inputs_path.format(year=year)
-    hours = prepare_model_inputs(pth)
-    for ib in ibio:
+# # Sensitivity to starting biomass
+# for year in range(2000, 2023):
+#     print(year)
+#     pth = inputs_path.format(year=year)
+#     hours = prepare_model_inputs(pth)
+#     for ib in ibio:
 
-        bio = xr.DataArray(ib, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+#         bio = xr.DataArray(ib, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-        cg, dp = run_model_annual(hours, bio, default_ploss)
+#         cg, dp = run_model_annual(hours, bio, default_ploss)
 
-        full_out = xr.merge([hours, cg, dp])
-        full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ibio', f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'),
-                          encoding=encoding
-        )
+#         full_out = xr.merge([hours, cg, dp])
+#         full_out.to_netcdf(os.path.join(output_path, 'sensitivity_ibio', f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'),
+#                           encoding=encoding
+#         )
 
-# %% trusted=true
-ibio
+# # %% trusted=true
+# ibio
 
-# %% trusted=true
-full_out.cum_growth.where(mar.MSK > 50).where(full_out.cum_growth > 179).sum(dim='TIME').plot()
+# # %% trusted=true
+# full_out.cum_growth.where(mar.MSK > 50).where(full_out.cum_growth > 179).sum(dim='TIME').plot()
 
-# %% trusted=true
+# # %% trusted=true
