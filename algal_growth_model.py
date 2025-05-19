@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.14.4
+#       jupytext_version: 1.16.4
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -28,13 +28,22 @@
 
 # %% trusted=true
 # local
-# inputs_path = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
-# mar_example = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
+#inputs_path = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+#mar_example = '/Users/tedstona/Library/CloudStorage/Dropbox/work/tmp_shares/williamson_MAR_hourly/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
+#output_path = '/scratch/williamson/2025-04/'
+#from dask.distributed import LocalCluster as MyCluster
+
+# octopus
+inputs_path = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+mar_example = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
+output_path = '/work/atedstone/williamson/2025-05/'
+from dask.distributed import LocalCluster as MyCluster
 
 # beo05
-inputs_path = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
-mar_example = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
-output_path = '/flash/tedstona/williamson/outputs/'
+# inputs_path = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
+# mar_example = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
+# output_path = '/flash/tedstona/williamson/outputs/'
+#from dask_jobqueue import SLURMCluster as MyCluster
 
 # netcdf output compression options
 # cum growth: float64, up to c. 30,000.
@@ -45,6 +54,19 @@ encoding = {
     'today_prod':     {'dtype': 'int16', 'scale_factor': 1, '_FillValue': -9999},
     'daily_prod_hrs': {'dtype': 'int8',  'scale_factor': 1, '_FillValue': -9999} 
 }
+
+# %% trusted=true
+
+
+cluster = MyCluster()
+
+#cluster.scale(jobs=6)
+cluster.scale(n=10)
+from dask.distributed import Client
+client = Client(cluster)
+
+# %% trusted=true
+client
 
 # %% trusted=true
 import numpy as np
@@ -100,17 +122,6 @@ def prepare_model_inputs(
 
 
 # %% trusted=true
-from dask_jobqueue import SLURMCluster as MyCluster
-from dask.distributed import Client
-cluster = MyCluster()
-cluster.scale(jobs=6)
-client = Client(cluster)
-
-# %% trusted=true
-client
-
-
-# %% trusted=true
 def run_model_annual(prod_hrs, initial_bio, percent_loss):
     
     bio = deepcopy(initial_bio)
@@ -160,6 +171,105 @@ def run_model_annual(prod_hrs, initial_bio, percent_loss):
 mar = xr.open_dataset(mar_example)
 mar = mar.rename({'Y19_288':'y', 'X14_163':'x'})
 mar = mar.rio.write_crs('epsg:3413')
+
+# %% [markdown]
+# ## Monte Carlo simulation
+
+# %% trusted=true
+#pt_s6_x = -2507730
+#pt_s6_y = -193438
+
+# %% trusted=true
+# Quasi Monte Carlo
+from scipy.stats import qmc
+
+# Inverse cumulative distribution function for the triangular distribution
+def icdf(sample, a, c, b):
+    """
+    sample : the column of values drawn.
+    a : min
+    c : mode
+    b : max
+    """
+    x_values = np.zeros_like(sample)
+    for i, u in enumerate(sample):
+        if u <= (c - a) / (b - a):
+            x_values[i] = a + np.sqrt((b - a) * (c - a) * u)
+        else:
+            x_values[i] = b - np.sqrt((b - a) * (b - c) * (1 - u))
+    return x_values
+
+
+# %% trusted=true
+engine = qmc.Sobol(d=4)
+qmc_vals = engine.random(512)
+
+# %% trusted=true
+qmc.discrepancy(qmc_vals)
+
+# %% trusted=true
+# Specify the triangular distributions of each variable
+# (min, mode, max)
+# These values directly define the shape of the PDF.
+
+# Threshold air temperature above which algae can bloom (degrees C)
+dist_t = (0.0, 0.5, 1.0)
+# Maximum snow depth below which ice algae can bloom (metres)
+dist_sd = (0.0, 0.05, 0.5)
+# SWD above which algae can bloom
+# N.b. Proxy for PAR. 50 Wm-2 is roughly 100 umol (1 W --> 2 mmol)
+dist_swd = (25, 50, 100)
+# Daily population loss term (proportion 0-->1)
+dist_ploss = (0.05, 0.10, 0.15)
+
+# %% trusted=true
+# Transform the QMC to the experiment parameters using the specified distibutions
+exps_t = icdf(qmc_vals[:,0], *dist_t)
+exps_sd = icdf(qmc_vals[:,1], *dist_sd)
+exps_swd = icdf(qmc_vals[:,2], *dist_swd)
+exps_ploss = icdf(qmc_vals[:,3], *dist_ploss)
+
+# %% trusted=true
+# Run for a single point, a bunch of single points, or the entire grid?
+
+initial_bio = 179
+year = 2012
+
+i = 1
+for t, sd, swd, ploss in zip(exps_t, exps_sd, exps_swd, exps_ploss):
+    print(f'Experiment {i}')
+    pth = inputs_path.format(year=year)
+    
+    hours = prepare_model_inputs(
+        pth,
+        light_thres=swd,
+        temp_thres=t,
+        snow_thres=sd
+    )
+
+    # Subset to a specified point only
+    # hours = hours.sel(x=pt_s6_x, y=pt_s6_y, method='nearest')
+    
+    bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+    cg, dp = run_model_annual(hours, bio, ploss)
+
+    full_out = xr.merge([hours, cg, dp])
+
+    full_out['attrs']['param_swd'] = swd
+    full_out['attrs']['param_t'] = t
+    full_out['attrs']['param_sd'] = sd
+    full_out['attrs']['param_ploss'] = ploss
+    full_out['attrs']['param_startpop'] = initial_ibio
+    
+    full_out.to_netcdf(
+        os.path.join(output_path, '2025-05', f'model_outputs_{year}_exp{i}.nc'),
+        encoding=encoding
+    )
+    i += 1
+
+# %% [markdown]
+# ## Code from before 04/2025 below...
 
 # %% trusted=true
 # MAIN MODEL RUN
