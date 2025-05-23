@@ -18,6 +18,7 @@ import xarray as xr
 import rioxarray
 from copy import deepcopy
 import os
+import argparse
 
 from scipy.stats import qmc
 
@@ -27,6 +28,7 @@ inputs_path = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year
 mar_example = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
 output_path = '/work/atedstone/williamson/2025-05/'
 from dask.distributed import LocalCluster as MyCluster
+from dask.distributed import Client
 
 # beo05
 # inputs_path = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
@@ -149,100 +151,104 @@ def icdf(sample, a, c, b):
     return x_values
 
 
+
 if __name__ == '__main__':
-    cluster = MyCluster()
 
-    #cluster.scale(jobs=6)
-    cluster.scale(n=10)
-    from dask.distributed import Client
-    client = Client(cluster)
+    p = argparse.ArgumentParser('Run QMC for algal blooms.')
+    p.add_argument('-y', type=int)
+    p.add_argument('-e', type=str, help='path to experiments CSV file')
+    p.add_argument('-init', type='store_true', help='initialise experiments CSV file then exit. (No other params needed)')
 
-    # %% trusted=true
-    client
-    # %% trusted=true
-    mar = xr.open_dataset(mar_example)
-    mar = mar.rename({'Y19_288':'y', 'X14_163':'x'})
-    mar = mar.rio.write_crs('epsg:3413')
-
-
-    # %% trusted=true
-    #pt_s6_x = -2507730
-    #pt_s6_y = -193438
+    args = p.parse_args()
 
     initial_bio = 179
-    year = 2012
+    
+    if args.init:
+        print('EXPERIMENT DESIGN')
+        engine = qmc.Sobol(d=4)
+        qmc_vals = engine.random(512)
 
-    # %% trusted=true
-    engine = qmc.Sobol(d=4)
-    qmc_vals = engine.random(512)
+        # %% trusted=true
+        # Specify the triangular distributions of each variable
+        # (min, mode, max)
+        # These values directly define the shape of the PDF.
 
-    # %% trusted=true
-    #qmc.discrepancy(qmc_vals)
+        # Threshold air temperature above which algae can bloom (degrees C)
+        dist_t = (0.0, 0.5, 1.0)
+        # Maximum snow depth below which ice algae can bloom (metres)
+        dist_sd = (0.0, 0.05, 0.5)
+        # SWD above which algae can bloom
+        # N.b. Proxy for PAR. 50 Wm-2 is roughly 100 umol (1 W --> 2 mmol)
+        dist_swd = (25, 50, 100)
+        # Daily population loss term (proportion 0-->1)
+        dist_ploss = (0.05, 0.10, 0.15)
 
-    # %% trusted=true
-    # Specify the triangular distributions of each variable
-    # (min, mode, max)
-    # These values directly define the shape of the PDF.
+        # %% trusted=true
+        # Transform the QMC to the experiment parameters using the specified distibutions
+        exps_t = icdf(qmc_vals[:,0], *dist_t)
+        exps_sd = icdf(qmc_vals[:,1], *dist_sd)
+        exps_swd = icdf(qmc_vals[:,2], *dist_swd)
+        exps_ploss = icdf(qmc_vals[:,3], *dist_ploss)
 
-    # Threshold air temperature above which algae can bloom (degrees C)
-    dist_t = (0.0, 0.5, 1.0)
-    # Maximum snow depth below which ice algae can bloom (metres)
-    dist_sd = (0.0, 0.05, 0.5)
-    # SWD above which algae can bloom
-    # N.b. Proxy for PAR. 50 Wm-2 is roughly 100 umol (1 W --> 2 mmol)
-    dist_swd = (25, 50, 100)
-    # Daily population loss term (proportion 0-->1)
-    dist_ploss = (0.05, 0.10, 0.15)
+        exps_pd = pd.DataFrame({'T_celsius':exps_t, 'snow_depth_metres':exps_sd, 'SWd_wm2':exps_swd, 'ploss':exps_ploss})
+        exps_pd.index += 1
+        fn = os.path.join(output_path, f'expt_parameters_ibio{initial_bio}.csv')
+        exps_pd.to_csv(fn)
+        print(r'Experiments design saved to {fn} .')
 
-    # %% trusted=true
-    # Transform the QMC to the experiment parameters using the specified distibutions
-    exps_t = icdf(qmc_vals[:,0], *dist_t)
-    exps_sd = icdf(qmc_vals[:,1], *dist_sd)
-    exps_swd = icdf(qmc_vals[:,2], *dist_swd)
-    exps_ploss = icdf(qmc_vals[:,3], *dist_ploss)
+    else:
+        print('QMC MODEL RUN')
 
-    exps_pd = pd.DataFrame({'T_celsius':exps_t, 'snow_depth_metres':exps_sd, 'SWd_wm2':exps_swd, 'ploss':exps_ploss})
-    exps_pd.index += 1
-    exps_pd.to_csv(os.path.join(output_path, 'expt_parameters_{year}_ibio{initial_bio}.csv'))
+        efn = args['e']
+        print(f'Loading experiments file {efn}')
+        expts_pd = pd.read_csv(, index_col=0)
 
-    # %% trusted=true
-    # Run for a single point, a bunch of single points, or the entire grid?
-
-    i = 1
-    for t, sd, swd, ploss in zip(exps_t, exps_sd, exps_swd, exps_ploss):
-        print(f'Experiment {i}')
-        pth = inputs_path.format(year=year)
+        cluster = MyCluster()
+        cluster.scale(n=10)
         
-        hours = prepare_model_inputs(
-            pth,
-            light_thres=swd,
-            temp_thres=t,
-            snow_thres=sd
-        )
+        client = Client(cluster)
 
-        # Subset to a specified point only
-        # hours = hours.sel(x=pt_s6_x, y=pt_s6_y, method='nearest')
-        
-        bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+        mar = xr.open_dataset(mar_example)
+        mar = mar.rename({'Y19_288':'y', 'X14_163':'x'})
+        mar = mar.rio.write_crs('epsg:3413')
 
-        cg, dp = run_model_annual(hours, bio, ploss)
+        #pt_s6_x = -2507730
+        #pt_s6_y = -193438
 
-        full_out = xr.merge([hours, cg, dp])
+        pth = inputs_path.format(year=args.year)
 
-        full_out.attrs['param_swd'] = swd
-        full_out.attrs['param_t'] = t
-        full_out.attrs['param_sd'] = sd
-        full_out.attrs['param_ploss'] = ploss
-        full_out.attrs['param_startpop'] = initial_bio
+        i = 1
+        for ix, row in expts_pd.iterrows():
+            print(f'Experiment {i}')
+            
+            hours = prepare_model_inputs(
+                pth,
+                light_thres=row['SWd_wm2'],
+                temp_thres=row['T_celsius'],
+                snow_thres=row['snow_depth_metres']
+            )
 
-        comp = dict(zlib=True, complevel=5)
-        encoding = {var: comp for var in full_out.data_vars}
-        
-        full_out.to_netcdf(
-            os.path.join(output_path, '2025-05', f'model_outputs_{year}_exp{i}.nc'),
-            encoding=encoding
-        )
-        i += 1
+            bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
+
+            cg, dp = run_model_annual(hours, bio, row['ploss'])
+
+            full_out = xr.merge([hours, cg, dp])
+            
+            full_out.attrs['exp_id'] = i
+            full_out.attrs['param_swd'] = row['SWd_wm2']
+            full_out.attrs['param_t'] = row['T_celsius']
+            full_out.attrs['param_sd'] = row['snow_depth_metres']
+            full_out.attrs['param_ploss'] = row['ploss']
+            full_out.attrs['param_startpop'] = initial_bio
+
+            comp = dict(zlib=True, complevel=5)
+            encoding = {var: comp for var in full_out.data_vars}
+            
+            full_out.to_netcdf(
+                os.path.join(output_path, f'model_outputs_{year}_exp{i}.nc'),
+                encoding=encoding
+            )
+            i += 1
 
 # # %% [markdown]
 # # ## Code from before 04/2025 below...
