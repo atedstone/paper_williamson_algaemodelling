@@ -157,7 +157,7 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser('Run QMC for algal blooms.')
     p.add_argument('-y', type=int)
     p.add_argument('-e', type=str, help='path to experiments CSV file')
-    p.add_argument('-init', type='store_true', help='initialise experiments CSV file then exit. (No other params needed)')
+    p.add_argument('-init', action='store_true', help='initialise experiments CSV file then exit. (No other params needed)')
 
     args = p.parse_args()
 
@@ -199,7 +199,7 @@ if __name__ == '__main__':
     else:
         print('QMC MODEL RUN')
 
-        efn = args['e']
+        efn = args.e
         print(f'Loading experiments file {efn}')
         expts_pd = pd.read_csv(efn, index_col=0)
 
