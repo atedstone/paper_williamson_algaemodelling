@@ -201,7 +201,7 @@ if __name__ == '__main__':
 
         efn = args['e']
         print(f'Loading experiments file {efn}')
-        expts_pd = pd.read_csv(, index_col=0)
+        expts_pd = pd.read_csv(efn, index_col=0)
 
         cluster = MyCluster()
         cluster.scale(n=10)
