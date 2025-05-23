@@ -194,7 +194,7 @@ if __name__ == '__main__':
         exps_pd.index += 1
         fn = os.path.join(output_path, f'expt_parameters_ibio{initial_bio}.csv')
         exps_pd.to_csv(fn)
-        print(r'Experiments design saved to {fn} .')
+        print(f'Experiments design saved to {fn} .')
 
     else:
         print('QMC MODEL RUN')
@@ -215,7 +215,8 @@ if __name__ == '__main__':
         #pt_s6_x = -2507730
         #pt_s6_y = -193438
 
-        pth = inputs_path.format(year=args.year)
+        year = args.y
+        pth = inputs_path.format(year=year)
 
         i = 1
         for ix, row in expts_pd.iterrows():
