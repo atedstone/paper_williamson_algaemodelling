@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.4
+#       jupytext_version: 1.17.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -52,11 +52,9 @@ import seaborn as sns
 
 sns.set_context('paper')
 rcParams['font.family'] = 'Arial'
-rcParams['font.size'] = 9
+rcParams['font.size'] = 8
 
 # %% trusted=true
-# If running on a SLURM HPC cluster then spin up compute nodes
-#from dask_jobqueue import SLURMCluster as MyCluster
 from dask.distributed import LocalCluster as MyCluster
 from dask.distributed import Client
 cluster = MyCluster()
@@ -70,30 +68,31 @@ client
 # ## Paths/Settings
 
 # %% trusted=true
-# beo05
-#INPUTS_PATH = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-*_05-09_ALGV.nc'
-# WORK_ROOT = '/flash/tedstona/williamson/' 
-# # A 'reference' MAR output, mainly for the mask and georeferencing
-# MAR_REF = '/flash/tedstona/MARv3.14-ERA5-10km/MARv3.14.0-10km-daily-ERA5-2017.nc'
-# # GrIS drainage basins
-# BASINS_FILE = '/flash/tedstona/L0data/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp'
-# OUTLINE_FILE = '/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp'
-# GRIS_BBOX_FILE = '/flash/tedstona/L0data/greenland_area_bbox/greenland_area_bbox.shp'
-# SURF_CONTOURS_FILE = os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500', 'contour.shp')
-DEM_FILE = os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif')
-
+# OPTIONS - pick your system
 # unil mac
+# GIS_ROOT = '/Users/atedston/Dropbox/work/gis/'
+# INPUTS_PATH = None
+# WORK_ROOT = '/scratch/williamson/'
+
+# octo
+GIS_ROOT = '/work/atedstone/gis/'
 INPUTS_PATH = None
-WORK_ROOT = '/scratch/williamson/'
+WORK_ROOT = '/work/atedstone/williamson/'
+
+# %% trusted=true
+## CREATE PATHS
+
 # A 'reference' MAR output, mainly for the mask and georeferencing
-MAR_REF = '/Users/atedston/scratch/williamson/MARv3.14.0-10km-daily-ERA5-2022.nc'
-# GrIS drainage basins
-BASINS_FILE = '/Users/atedston/Dropbox/work/gis/doi_10.7280_D1WT11__v1/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp'
-OUTLINE_FILE = '/Users/atedston/Dropbox/work/gis/gris_only_outline/greenland_icesheet_fix.shp'
-LAND_AREAS_FILE = '/Users/atedston/Dropbox/work/gis/ne_10m_land.shp'
-GRIS_BBOX_FILE = '/Users/atedston/Dropbox/work/gis/greenland_area_bbox/greenland_area_bbox.shp'
-SURF_CONTOURS_FILE = '/Users/atedston/Dropbox/work/gis/gimp_contours/gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500/contour.shp'
+MAR_REF = os.path.join(WORK_ROOT, 'MARv3.14.0-10km-daily-ERA5-2022.nc')
+# DEM file specific to this project
 DEM_FILE = os.path.join(WORK_ROOT, 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif')
+
+# Generic GIS requirements
+BASINS_FILE = os.path.join(GIS_ROOT, 'doi_10.7280_D1WT11__v1/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp')
+OUTLINE_FILE = os.path.join(GIS_ROOT, 'gris_only_outline/greenland_icesheet_fix.shp')
+LAND_AREAS_FILE = os.path.join(GIS_ROOT, 'ne_10m_land/ne_10m_land.shp')
+GRIS_BBOX_FILE = os.path.join(GIS_ROOT, 'greenland_area_bbox/greenland_area_bbox.shp')
+SURF_CONTOURS_FILE = os.path.join(GIS_ROOT, 'gimp_contours/gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500/contour.shp')
 
 # -----------------------------------------------------------------------------------
 # Algal growth model sensitivity runs (accessed by wildcard in script)
@@ -265,20 +264,23 @@ basins
 # ## Quasi Monte Carlo analysis
 
 # %% trusted=true scrolled=true
-def analyse_qmc(year, s6=False):
+def analyse_qmc(year, s6=False, qm_metrics=False):
     # Time-series results
     qmc = {}
-    # Bloom max of each experiment
-    bmax = []
-    # Running standard deviation of bmax
-    sd = []
-    # Running standard deviation of sd
-    sd_sd = []
+    
+    if qm_metrics:
+        # Bloom max of each experiment
+        bmax = []
+        # Running standard deviation of bmax
+        sd = []
+        # Running standard deviation of sd
+        sd_sd = []
 
     for exp in range(1, 513):
-        print(exp)
+        #print(exp)
         # Open the numbered experiment
-        r = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'qmc_{year}', f'model_outputs_{year}_exp{exp}.nc'))
+        #f'qmc_{year}',
+        r = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'model_outputs_{year}_exp{exp}.nc'))
         # If subset to s6 requested then do this now
         if s6:
             r = r.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
@@ -286,44 +288,57 @@ def analyse_qmc(year, s6=False):
         incl = r.cum_growth.where(r.cum_growth > START_POP).count(dim='TIME')
         # Reduce to 1-D timeseries
         ts = r.cum_growth.where(mar.MSK > 50).where(incl > 1).median(dim=('x','y')).to_pandas() #.where(r.cum_growth > START_POP)
-        # Append the metrics
-        bmax.append(ts.max())
-        sd.append(np.std(bmax))
-        sd_sd.append(np.std(sd))
+        if qm_metrics:
+            # Append the metrics
+            bmax.append(ts.max())
+            sd.append(np.std(bmax))
+            sd_sd.append(np.std(sd))
         # Save the time series
         qmc[exp] = ts
         qmc[exp].name = f'exp{exp}'
 
-    return (qmc, bmax, sd, sd_sd)
+    t = pd.concat(qmc, axis=1)
+    if qm_metrics:
+        return (t, 
+                bmax, 
+                sd, 
+                sd_sd)
+    else:
+        return t
 
 
 # %% trusted=true scrolled=true
-qmc00, bmax00, sd00, sd_sd00 = analyse_qmc(2000)
+for year in range(2001, 2023):
+    print(year)
+    ensemble = analyse_qmc(year)
+    ensemble.to_csv(os.path.join(RESULTS,f'qmc_gris_median_ts_{year}.csv'))
 
 # %% trusted=true
-plt.plot(sd)
-plt.plot(sd_sd)
+qmc = {}
+for year in range(2000, 2023):
+    qmc[year] = pd.read_csv(os.path.join(RESULTS,f'qmc_gris_median_ts_{year}.csv'), index_col=0)
 
 # %% trusted=true
-from copy import deepcopy
-bmax_gris = deepcopy(bmax)
+qmc[2001].plot(legend=False)
 
 # %% trusted=true
-plt.hist(bmax, bins=np.arange(5000,30000,2000))
+qmc[2000].max(axis=0)
+
+# %% trusted=true
+for year in range(2000, 2023):
+    #plt.hist(qmc[year].max(axis=0))
+    sns.kdeplot(qmc[year].max(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
 
 # %% trusted=true
 sns.kdeplot(bmax_gris, fill=True, label='2012')
 sns.kdeplot(bmax00, fill=True, label='2000')
 plt.legend()
 
-# %% trusted=true
-qmc12pd = pd.concat(qmc12, axis=1)
-
 # %% trusted=true scrolled=true
 qmc12_s6, bmax12_s6, sd12_s6, sd_sd12_s6 = analyse_qmc(2012, s6=True)
 
 # %% trusted=true scrolled=true
-pd.DataFrame(qmc12_s6).plot(legend=False, alpha=0.1, color='tab:blue')
+qmc12_s6.plot(legend=False, alpha=0.1, color='tab:blue')
 
 # %% trusted=true
 qmc12pd.plot(alpha=0.1, color='tab:blue', legend=False)
