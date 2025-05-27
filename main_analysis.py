@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.14.4
+#       jupytext_version: 1.16.4
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -56,14 +56,12 @@ rcParams['font.size'] = 9
 
 # %% trusted=true
 # If running on a SLURM HPC cluster then spin up compute nodes
-from dask_jobqueue import SLURMCluster as MyCluster
+#from dask_jobqueue import SLURMCluster as MyCluster
+from dask.distributed import LocalCluster as MyCluster
 from dask.distributed import Client
 cluster = MyCluster()
-cluster.scale(jobs=4)
+cluster.scale(n=4)
 client = Client(cluster)
-
-# %% trusted=true
-cluster.scale(jobs=4)
 
 # %% trusted=true
 client
@@ -72,11 +70,46 @@ client
 # ## Paths/Settings
 
 # %% trusted=true
-# A 'reference' MAR output, mainly for the mask and georeferencing
-MAR_REF = '/flash/tedstona/MARv3.14-ERA5-10km/MARv3.14.0-10km-daily-ERA5-2017.nc'
-# GrIS drainage basins
-BASINS_FILE = '/flash/tedstona/L0data/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp'
+# beo05
+#INPUTS_PATH = '/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-*_05-09_ALGV.nc'
+# WORK_ROOT = '/flash/tedstona/williamson/' 
+# # A 'reference' MAR output, mainly for the mask and georeferencing
+# MAR_REF = '/flash/tedstona/MARv3.14-ERA5-10km/MARv3.14.0-10km-daily-ERA5-2017.nc'
+# # GrIS drainage basins
+# BASINS_FILE = '/flash/tedstona/L0data/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp'
+# OUTLINE_FILE = '/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp'
+# GRIS_BBOX_FILE = '/flash/tedstona/L0data/greenland_area_bbox/greenland_area_bbox.shp'
+# SURF_CONTOURS_FILE = os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500', 'contour.shp')
+DEM_FILE = os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif')
 
+# unil mac
+INPUTS_PATH = None
+WORK_ROOT = '/scratch/williamson/'
+# A 'reference' MAR output, mainly for the mask and georeferencing
+MAR_REF = '/Users/atedston/scratch/williamson/MARv3.14.0-10km-daily-ERA5-2022.nc'
+# GrIS drainage basins
+BASINS_FILE = '/Users/atedston/Dropbox/work/gis/doi_10.7280_D1WT11__v1/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp'
+OUTLINE_FILE = '/Users/atedston/Dropbox/work/gis/gris_only_outline/greenland_icesheet_fix.shp'
+LAND_AREAS_FILE = '/Users/atedston/Dropbox/work/gis/ne_10m_land.shp'
+GRIS_BBOX_FILE = '/Users/atedston/Dropbox/work/gis/greenland_area_bbox/greenland_area_bbox.shp'
+SURF_CONTOURS_FILE = '/Users/atedston/Dropbox/work/gis/gimp_contours/gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500/contour.shp'
+DEM_FILE = os.path.join(WORK_ROOT, 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif')
+
+# -----------------------------------------------------------------------------------
+# Algal growth model sensitivity runs (accessed by wildcard in script)
+MODEL_OUTPUTS_SENS_IBIO = os.path.join(WORK_ROOT, 'outputs/sensitivity_ibio')
+MODEL_OUTPUTS_SENS_PLOS = os.path.join(WORK_ROOT, 'outputs/sensitivity_ploss')
+MODEL_OUTPUTS_SENS_TEMP = os.path.join(WORK_ROOT, 'outputs/sensitivity_temp')
+MODEL_OUTPUTS_SENS_LIGH = os.path.join(WORK_ROOT, 'outputs/sensitivity_light')
+MODEL_OUTPUTS_SENS_SNOW = os.path.join(WORK_ROOT, 'outputs/sensitivity_snowdepth')
+
+# Main run of algal growth model
+MODEL_OUTPUTS_MAIN = os.path.join(WORK_ROOT, 'outputs/main_outputs')
+
+# Save location for figures, CSV files
+RESULTS = os.path.join(WORK_ROOT, 'results')
+
+# %% trusted=true
 # Growth model start and end
 YR_ST = 2000
 YR_END = 2022
@@ -87,19 +120,6 @@ P_LOSS = 0.10
 SNOW_DEPTH = 0.01
 SURF_T = 0.5
 LIGHT_T = 10
-
-# Algal growth model sensitivity runs (accessed by wildcard in script)
-MODEL_OUTPUTS_SENS_IBIO = '/flash/tedstona/williamson/outputs/sensitivity_ibio/'
-MODEL_OUTPUTS_SENS_PLOS = '/flash/tedstona/williamson/outputs/sensitivity_ploss/'
-MODEL_OUTPUTS_SENS_TEMP = '/flash/tedstona/williamson/outputs/sensitivity_temp/'
-MODEL_OUTPUTS_SENS_LIGH = '/flash/tedstona/williamson/outputs/sensitivity_light/'
-MODEL_OUTPUTS_SENS_SNOW = '/flash/tedstona/williamson/outputs/sensitivity_snowdepth/'
-
-# Main run of algal growth model
-MODEL_OUTPUTS_MAIN = '/flash/tedstona/williamson/outputs/main_outputs/'
-
-# Save location for figures, CSV files
-RESULTS = '/flash/tedstona/williamson/results/'
 
 
 # %% [markdown]
@@ -167,26 +187,15 @@ def label_panel(ax, letter, xy=(0.04,0.93)):
 # ## Load GIS data
 
 # %% trusted=true
-shp = gpd.read_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp')
-
 
 # %% trusted=true
-shp_simpl = shp.geometry.simplify(5000).buffer(0)
-
-# %% trusted=true
-shp_simpl.plot()
-
-# %% trusted=true
-shp_simpl.to_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_simplify5000_buffer0.shp')
-
-# %% trusted=true
-gris_outline = gpd.read_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp')
+gris_outline = gpd.read_file(OUTLINE_FILE)
 gris_outline = gris_outline.to_crs(3413)
 
 # World land areas
-greenland = gpd.read_file('/flash/tedstona/L0data/ne_10m_land/ne_10m_land.shp')
+greenland = gpd.read_file(LAND_AREAS_FILE)
 # Crop world land areas to Greenland and surrounding areas
-bbox = gpd.read_file('/flash/tedstona/L0data/greenland_area_bbox/greenland_area_bbox.shp').to_crs(3413)
+bbox = gpd.read_file(GRIS_BBOX_FILE).to_crs(3413)
 just_greenland = gpd.clip(greenland.to_crs(3413), bbox)
 
 # Manually isolate contiguous Greenland polygon from the main multi-polygon.
@@ -197,14 +206,18 @@ jgg_gdf = gpd.GeoDataFrame({'ix':[1,]}, geometry=[jgg_poly], crs=3413)
 
 # Surface elevation contours
 # Source of process: atedstone:paper_rlim_detection_repo/plot_map_decadal_change.py
-
-# shp : greenland_icesheet.shp from Horst, run through geopandas simplify and buffer operations
+# shp : greenland_icesheet.shp from Horst, run through geopandas simplify and buffer operations as follows:
+## shp = gpd.read_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_fix.shp')
+## shp_simpl = shp.geometry.simplify(5000).buffer(0)
+## shp_simpl.plot()
+## shp_simpl.to_file('/flash/tedstona/L0data/gris_only_outline/greenland_icesheet_simplify5000_buffer0.shp')
+# Then gdal warp:
 # gdalwarp -cutline ../gris_only_outline/greenland_icesheet_simplify5000_buffer0.shp GimpIceMask_90m_v1.1_epsg3413.tif GimpIceMask_90m_v1.1_epsg3413_gris.tif
 # gdal_calc.py -A gimpdem_90m_v01.1_EPSG3413.tif -B ../GIMPMASK/GimpIceMask_90m_v1.1_epsg3413_gris.tif --calc=A*B --outfile=gimpdem_90m_v01.1_EPSG3413_grisonly.tif
 # gdal_fillnodata.py gimpdem_90m_v01.1_EPSG3413_grisonly.tif gimpdem_90m_v01.1_EPSG3413_grisonly_filled.tif
 # gdalwarp -tr 2000 2000 gimpdem_90m_v01.1_EPSG3413_grisonly_filled.tif gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif
 # gdal_contour -i 500 gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500 -f 'ESRI Shapefile' -a elev
-surf_contours = gpd.read_file(os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500', 'contour.shp')).to_crs(3413)
+surf_contours = gpd.read_file(SURF_CONTOURS_FILE).to_crs(3413)
 
 # %% trusted=true
 # Open 'reference' MAR run, mainly for the ice sheet mask
@@ -247,6 +260,93 @@ basins.index = basins.SUBREGION1
 # %% trusted=true
 basins
 
+
+# %% [markdown]
+# ## Quasi Monte Carlo analysis
+
+# %% trusted=true scrolled=true
+def analyse_qmc(year, s6=False):
+    # Time-series results
+    qmc = {}
+    # Bloom max of each experiment
+    bmax = []
+    # Running standard deviation of bmax
+    sd = []
+    # Running standard deviation of sd
+    sd_sd = []
+
+    for exp in range(1, 513):
+        print(exp)
+        # Open the numbered experiment
+        r = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'qmc_{year}', f'model_outputs_{year}_exp{exp}.nc'))
+        # If subset to s6 requested then do this now
+        if s6:
+            r = r.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
+        # Identify pixels to include according to whether they saw any growth in the season
+        incl = r.cum_growth.where(r.cum_growth > START_POP).count(dim='TIME')
+        # Reduce to 1-D timeseries
+        ts = r.cum_growth.where(mar.MSK > 50).where(incl > 1).median(dim=('x','y')).to_pandas() #.where(r.cum_growth > START_POP)
+        # Append the metrics
+        bmax.append(ts.max())
+        sd.append(np.std(bmax))
+        sd_sd.append(np.std(sd))
+        # Save the time series
+        qmc[exp] = ts
+        qmc[exp].name = f'exp{exp}'
+
+    return (qmc, bmax, sd, sd_sd)
+
+
+# %% trusted=true scrolled=true
+qmc00, bmax00, sd00, sd_sd00 = analyse_qmc(2000)
+
+# %% trusted=true
+plt.plot(sd)
+plt.plot(sd_sd)
+
+# %% trusted=true
+from copy import deepcopy
+bmax_gris = deepcopy(bmax)
+
+# %% trusted=true
+plt.hist(bmax, bins=np.arange(5000,30000,2000))
+
+# %% trusted=true
+sns.kdeplot(bmax_gris, fill=True, label='2012')
+sns.kdeplot(bmax00, fill=True, label='2000')
+plt.legend()
+
+# %% trusted=true
+qmc12pd = pd.concat(qmc12, axis=1)
+
+# %% trusted=true scrolled=true
+qmc12_s6, bmax12_s6, sd12_s6, sd_sd12_s6 = analyse_qmc(2012, s6=True)
+
+# %% trusted=true scrolled=true
+pd.DataFrame(qmc12_s6).plot(legend=False, alpha=0.1, color='tab:blue')
+
+# %% trusted=true
+qmc12pd.plot(alpha=0.1, color='tab:blue', legend=False)
+qmc12pd.mean(axis=1).plot(color='k', linewidth=1.5)
+qmc12pd.quantile(0.05, axis=1).plot(color='k', linewidth=1)
+qmc12pd.quantile(0.95, axis=1).plot(color='k', linewidth=1)
+sns.despine()
+
+
+# %% trusted=true scrolled=true
+qmc12pd.plot(alpha=0.1, color='tab:blue', legend=False)
+qmc12pd.mean(axis=1).plot(color='k', linewidth=1.5)
+qmc12pd.quantile(0.05, axis=1).plot(color='k', linewidth=1)
+qmc12pd.quantile(0.95, axis=1).plot(color='k', linewidth=1)
+sns.despine()qmc12pd.plot(alpha=0.1, color='tab:blue', legend=False)
+qmc12pd.mean(axis=1).plot(color='k', linewidth=1.5)
+qmc12pd.quantile(0.05, axis=1).plot(color='k', linewidth=1)
+qmc12pd.quantile(0.95, axis=1).plot(color='k', linewidth=1)
+sns.despine()
+
+# %% trusted=true
+incl.plot()
+
 # %% [markdown]
 # ---
 # ## Sensitivity analysis
@@ -265,7 +365,7 @@ basins
 #
 
 # %% trusted=true
-mar_alg_inputs = xr.open_mfdataset('/flash/tedstona/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-*_05-09_ALGV.nc')
+mar_alg_inputs = xr.open_mfdataset(INPUTS_PATH)
 mar_alg_inputs = mar_alg_inputs.squeeze()
 mar_alg_inputs = mar_alg_inputs.rename({'Y19_288':'y', 'X14_163':'x'})
 
@@ -858,7 +958,7 @@ annual_g_max = valid_growth.resample(TIME='1AS').max(dim='TIME').compute()
 
 # %% trusted=true
 def plot_contours(ax):
-    dem = gu.Raster(os.path.join('/flash/tedstona/L0data/GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif'))
+    dem = gu.Raster(DEM_FILE)
     x,y = dem.coords()
     CS = ax.contour(x, y, 
                 dem.data, 
@@ -968,7 +1068,7 @@ plt.savefig(os.path.join(RESULTS, 'fig_suppl_annual_bloom_max.pdf'), dpi=300, bb
 #
 # Need to normalise by area. The max approach doesn't do this, because in areas like the SW with bigger blooms, the boxplots of max get 'depressed' - even though the sample size is much bigger.
 
-# %%
+# %% trusted=true
 
 # %% trusted=true
 basins
@@ -1004,7 +1104,7 @@ for ix, basin in basins.iterrows():
 plt.title('')
 plt.savefig(os.path.join(RESULTS, 'fig_sectors_average_sum_map.pdf'), bbox_inches='tight')
 
-# %%
+# %% trusted=true
 fig, axes = plt.subplots(figsize=(5,6), ncols=2, nrows=4)
 axes = axes.flatten()
 
@@ -1234,4 +1334,4 @@ plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis.pdf'), bbox_inches='tight')
 
 # sens_ibio_test.cum_growth.where(mar.MSK > 50).where(sens_ibio_test.cum_growth > 179).resample(TIME='1AS').sum().plot(col='TIME', col_wrap=4)
 
-# %%
+# %% trusted=true
