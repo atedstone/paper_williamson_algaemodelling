@@ -76,7 +76,7 @@ client
 
 # octo
 GIS_ROOT = '/work/atedstone/gis/'
-INPUTS_PATH = None
+INPUTS_PATH = '/work/atedstone/williamson/MARv3.13-ERA5/*.nc'
 WORK_ROOT = '/work/atedstone/williamson/'
 
 # %% trusted=true
@@ -319,7 +319,7 @@ for year in range(2000, 2023):
     qmc[year] = pd.read_csv(os.path.join(RESULTS,f'qmc_gris_median_ts_{year}.csv'), index_col=0)
 
 # %% trusted=true
-qmc[2001].plot(legend=False)
+qmc[2001].plot(legend=False, color='tab:blue', alpha=0.1)
 
 # %% trusted=true
 qmc[2000].max(axis=0)
@@ -328,6 +328,37 @@ qmc[2000].max(axis=0)
 for year in range(2000, 2023):
     #plt.hist(qmc[year].max(axis=0))
     sns.kdeplot(qmc[year].max(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
+
+# %% trusted=true
+# look at experiments
+expts = pd.read_csv(os.path.join(WORK_ROOT, '2025-05', 'expt_parameters_ibio179.csv'), index_col=0)
+
+# %% trusted=true
+expts.columns
+
+# %% trusted=true
+expts.ploss.plot.hist()
+
+# %% trusted=true scrolled=true
+
+from scipy.stats import anderson
+
+# normality test
+for year in range(2000, 2023):
+    result = anderson(qmc[2000].max(axis=0))
+    print('Statistic: %.3f' % result.statistic)
+    p = 0
+    for i in range(len(result.critical_values)):
+    	sl, cv = result.significance_level[i], result.critical_values[i]
+    	if result.statistic < result.critical_values[i]:
+    		print('%.3f: %.3f, data looks normal (fail to reject H0)' % (sl, cv))
+    	else:
+    		print('%.3f: %.3f, data does not look normal (reject H0)' % (sl, cv))
+
+# %% trusted=true
+for year in range(2000, 2023):
+    #plt.hist(qmc[year].max(axis=0))
+    sns.kdeplot(qmc[year].sum(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
 
 # %% trusted=true
 sns.kdeplot(bmax_gris, fill=True, label='2012')
@@ -380,7 +411,7 @@ incl.plot()
 #
 
 # %% trusted=true
-mar_alg_inputs = xr.open_mfdataset(INPUTS_PATH)
+mar_alg_inputs = xr.open_mfdataset(INPUTS_PATH, chunks={'TIME':365})
 mar_alg_inputs = mar_alg_inputs.squeeze()
 mar_alg_inputs = mar_alg_inputs.rename({'Y19_288':'y', 'X14_163':'x'})
 
@@ -406,28 +437,276 @@ yr_recent_coldest = 2022
 yr_recent_warmest = 2019
 
 # %% [markdown]
-# ### Sensitivity to snow depth
+# ### Figure: Phenological parameters, S6
 
 # %% trusted=true
-regenerate = True
+year = 2016
+regenerate = False
+
+fn_ibio = os.path.join(RESULTS, 'sens_analysis_s6_ibio.csv')
+fn_ploss = os.path.join(RESULTS, 'sens_analysis_s6_ploss.csv')
+
 if regenerate:
+    print('Regenerating....')
+    ibio = [17.900000000000002, 179, 895, 1790]
+    site_store = {}
+    for ib in ibio:
+        sens_ibio = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'))          
+        v = sens_ibio.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+        site_store[ib] = v
+    ibio_site = pd.DataFrame(site_store)
+    ibio_site.columns = [int(np.round(float(c))) for c in ibio_site.columns]
+    ibio_site.to_csv(fn_ibio)
+
+    ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
+    site_store = {}
+    for pl in ploss:
+        sens_ploss = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'model_outputs_{year}*_ploss{pl}.nc'))
+        v = sens_ploss.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+        site_store[pl] = v  
+    ploss_site = pd.DataFrame(site_store)
+    ploss_site.columns = [str(int(float(c)*100))+'%' for c in ploss_site.columns]
+    ploss_site.to_csv(fn_ploss)
+else:
+    print('INFO...using cached results (not regenerated)')
+    
+ibio_site = pd.read_csv(fn_ibio, index_col=0, parse_dates=True)
+ploss_site = pd.read_csv(fn_ploss, index_col=0, parse_dates=True)
+
+
+
+
+# ADD BLOOM DURATION with shading
+
+
+fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(6.5, 2))
+
+# Starting population
+ibio_site.plot(
+    ax=axes[0],
+    legend=False,
+    colormap=sns.color_palette('flare', as_cmap=True),
+    logy=True
+)
+#m = dates.MonthLocator() 
+#axes[0].xaxis.set_major_locator(m)
+#axes[0].xaxis.set_major_formatter(dates.DateFormatter('%b'))
+
+#axes[0,0].set_title('S6')
+handles, labels = axes[0].get_legend_handles_labels()
+axes[0].legend(
+    handles[::-1], labels[::-1],     
+    loc=(1,0.4), 
+    frameon=False, 
+    title='Start pop.',
+    handlelength=1
+)
+label_panel(axes[0], 'a')
+axes[0].set_ylabel('Pop. size (ng DW ml$^{-1}$)')
+
+# Ploss
+ploss_site.plot(
+    ax=axes[1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+handles, labels = axes[1].get_legend_handles_labels()
+axes[1].legend(
+    handles, labels,     
+    loc=(1,0.1), 
+    frameon=False, 
+    title='Loss %',
+    handlelength=1
+)
+label_panel(axes[1], 'b')
+
+for ax in axes.flatten():
+    ax.set_ylim(0, 120000)
+    ax.set_xlabel('')
+
+plt.subplots_adjust(wspace=0.7)
+sns.despine()
+
+plt.savefig(os.path.join(RESULTS, 'fig_phenological.pdf'), bbox_inches='tight')
+
+# %% trusted=true
+ibio_site.index
+
+# %% [markdown]
+# ### Sensitivity to environmental parameters
+
+# %% trusted=true
+year = 2016
+regenerate = False
+
+fn_sd = os.path.join(RESULTS, 'sens_analysis_s6_snowdepth.csv')
+fn_li = os.path.join(RESULTS, 'sens_analysis_s6_swd.csv')
+fn_t = os.path.join(RESULTS, 'sens_analysis_s6_temperature.csv')
+
+
+if regenerate:
+
+    # Snow depth
     depths = [0.01, 0.05, 0.10, 0.2, 0.4, 0.8]
     site_store = {}
-    gris_store = {}
+    last_active_bloom = {}
     for d in depths:
-        print(d)
-        sens_sd = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_SNOW, f'*_snow{d}.nc'))
-        gris_store[d] = sens_sd.cum_growth.where(mar.MSK > 50).where(sens_sd.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
-        v = sens_sd.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
-        site_store[d] = v
-        
-    sd_gris = pd.DataFrame(gris_store)
-    sd_gris.to_csv(os.path.join(RESULTS, 'sens_snowdepth_time_series_gris.csv'))
-    
+        sens_sd = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_SNOW, f'model_outputs_{year}_ibio179_ploss0.1_snow{d}.nc'))
+        v = sens_sd.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
+        site_store[d] = v.cum_growth.to_pandas()
+        v['TIME'] = v['TIME.dayofyear']
+        last_active_bloom[d] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
     sd_site = pd.DataFrame(site_store)
-    sd_site.to_csv(os.path.join(RESULTS, 'sens_snowdepth_time_series_S6.csv'))
-else:
-    pass
+    sd_site.to_csv(fn_sd)
+    pd.Series(last_active_bloom).to_csv(fn_sd[:-4] + '_lastbloom.csv')
+
+    # SWd
+    lights = [1, 10, 100, 200]
+    site_store = {}
+    last_active_bloom = {}
+    for li in lights:
+        sens_li = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_LIGH, f'model_outputs_{year}_ibio179_ploss0.1_light{li}.nc'))
+        v = sens_li.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
+        site_store[li] = v.cum_growth.to_pandas()
+        v['TIME'] = v['TIME.dayofyear']
+        last_active_bloom[li] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
+    li_site = pd.DataFrame(site_store)
+    li_site.to_csv(fn_li)
+    pd.Series(last_active_bloom).to_csv(fn_li[:-4] + '_lastbloom.csv')
+
+    # Temperature
+    temps = [0, 0.25, 0.5, 1.0]
+    site_store = {}
+    last_active_bloom = {}
+    for t in temps:
+        sens_t = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_TEMP, f'model_outputs_{year}_ibio179_ploss0.1_temp{t}.nc'))
+        v = sens_t.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
+        site_store[t] = v.cum_growth.to_pandas()
+        v['TIME'] = v['TIME.dayofyear']
+        last_active_bloom[t] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
+    t_site = pd.DataFrame(site_store)
+    t_site.to_csv(fn_t)
+    pd.Series(last_active_bloom).to_csv(fn_t[:-4] + '_lastbloom.csv')
+
+sd_site = pd.read_csv(fn_sd, index_col=0, parse_dates=True)
+li_site = pd.read_csv(fn_li, index_col=0, parse_dates=True)
+t_site = pd.read_csv(fn_t, index_col=0, parse_dates=True)
+
+sd_site_end = pd.read_csv(fn_sd[:-4] + '_lastbloom.csv', index_col=0, parse_dates=True).squeeze()
+sd_site_end.index = sd_site_end.index.astype(str)
+li_site_end = pd.read_csv(fn_li[:-4] + '_lastbloom.csv', index_col=0, parse_dates=True).squeeze()
+li_site_end.index = li_site_end.index.astype(str)
+t_site_end = pd.read_csv(fn_t[:-4] + '_lastbloom.csv', index_col=0, parse_dates=True).squeeze()
+t_site_end.index = t_site_end.index.astype(str)
+
+
+# %% trusted=true
+def bloom_start(ts, startpop=179, n=3):
+    """
+    Determine bloom start day of year.
+
+    ts : time series (pd.DataFrame, may be multiple columns)
+    startpop : starting/background population ng DW ml-1
+    n : number of days of continuity to require when identifying start date.
+
+    returns pd.Series of dates
+    """
+
+    def _roll(ts, n=n):
+        return np.minimum(
+            np.maximum(0, 
+                       (ts.sum(axis=0) - n) + 1
+                      ),
+            1
+        )
+
+    # Work on copy of dataframe
+    ts = ts.copy()
+    # Convert series of pops to boolean
+    ts = (ts > startpop)
+    # Apply rolling while index is still datetime64
+    r = ts.rolling(f'{n}D').apply(_roll)
+    # Convert to DOY
+    r.index = r.index.dayofyear
+    return r.idxmax()
+
+
+t_start = bloom_start(t_site)
+sd_start = bloom_start(sd_site)
+li_start = bloom_start(li_site)
+
+
+t_dur = t_site_end - t_start
+sd_dur = sd_site_end - sd_start
+li_dur = li_site_end - li_start
+
+
+# %% trusted=true
+t_site_end
+
+# %% trusted=true
+
+# %% trusted=true
+from copy import deepcopy
+
+def active_bloom_sum(df, start_dates, end_dates):
+    vals = {}
+    for c in df.columns:
+        tmp = deepcopy(df[c])
+        tmp.index = tmp.index.dayofyear
+        clipped = tmp[(tmp.index >= start_dates[c] ) & (tmp.index <= end_dates[c])]
+        vals[c] = clipped.sum()
+    return pd.Series(vals)
+
+t_sum = active_bloom_sum(t_site, t_start, t_site_end)
+sd_sum = active_bloom_sum(sd_site, sd_start, sd_site_end)
+li_sum = active_bloom_sum(li_site, li_start, li_site_end)
+
+# %% trusted=true
+sd_sum.plot(marker='o')
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(7.5, 2))
+
+labels = ['T', 'Sn', 'SWD']
+
+
+# Ax Bloom onset 
+axes[0].plot([1]*len(t_site.columns), t_start, 'o')
+axes[0].plot([2]*len(sd_site.columns), sd_start, 'o')
+axes[0].plot([3]*len(li_site.columns), li_start, 'o')
+axes[0].xaxis.set_ticks([1,2,3], labels)
+axes[0].set_ylabel('Bloom start (DOY)')
+
+# Ax Bloom duration
+axes[1].plot([1]*len(t_site.columns), t_dur, 'o')
+axes[1].plot([2]*len(sd_site.columns), sd_dur, 'o')
+axes[1].plot([3]*len(li_site.columns), li_dur, 'o')
+axes[1].xaxis.set_ticks([1,2,3], labels)
+axes[1].set_ylabel('Bloom duration (days)')
+
+# Ax Max bloom size
+axes[2].plot([1]*len(t_site.columns), t_site.max(), 'o')
+axes[2].plot([2]*len(sd_site.columns), sd_site.max(), 'o')
+axes[2].plot([3]*len(li_site.columns), li_site.max(), 'o')
+axes[2].xaxis.set_ticks([1,2,3], labels)
+axes[2].set_ylabel('Max. pop size (ng DW ml-1)')
+
+# Sum of bloom during active period
+# Can't use simple sum, needs to be sum of active bloom period.
+axes[3].plot([1]*len(t_sum), t_sum, 'o')
+axes[3].plot([2]*len(sd_sum), sd_sum, 'o')
+axes[3].plot([3]*len(li_sum), li_sum, 'o')
+axes[3].xaxis.set_ticks([1,2,3], labels)
+axes[3].set_ylabel('Tot. pop size (ng DW ml-1)')
+
+sns.despine()
+plt.tight_layout()
+
+
+# %% trusted=true
+t_site.plot()
 
 # %% trusted=true
 fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
@@ -653,209 +932,6 @@ plt.subplots_adjust(hspace=0.4)
 sns.despine()
 
 plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_temperature.pdf'), bbox_inches='tight')
-
-# %% [markdown]
-# ### Sensitivity to starting biomass term
-
-# %% trusted=true
-# Ice-sheet-wide quantile, annual values
-# regenerate = False
-# if regenerate:
-#     ibio = [17.900000000000002, 179, 895, 1790]
-#     store = {}
-#     for ib in ibio:
-#         print(ib)
-#         sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
-#         sens_ibio['x'] = mar.x
-#         sens_ibio['y'] = mar.y
-#         store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).resample(TIME='1AS').quantile(0.9, dim='TIME').median(dim=('x','y')).to_pandas()
-#     ibio_quant90 = pd.DataFrame(store)
-#     ibio_quant90.to_csv(os.path.join(RESULTS, 'ibio_quant90.csv'))
-# else:
-#     ibio_quant90 = pd.read_csv(os.path.join(RESULTS, 'ibio_quant90.csv'), index_col=0, parse_dates=True)
-#     ibio_quant90.columns = [int(np.round(float(c))) for c in ibio_quant90.columns]
-
-# %% trusted=true
-# Here, do the same analysis but with the more straightforward annual median of all maximum pop sizes
-# And also pull out time series of individual sites.
-ibio = [17.900000000000002, 179, 895, 1790]
-store = {}
-site_store = {}
-for ib in ibio:
-    print(ib)
-    sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
-    sens_ibio['x'] = mar.x
-    sens_ibio['y'] = mar.y
-    store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).resample(TIME='1AS').max(dim='TIME').median(dim=('x','y')).to_pandas()
-    
-    v = sens_ibio.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
-    site_store[ib] = v
-ibio_max = pd.DataFrame(store)
-ibio_s6 = pd.DataFrame(site_store)
-
-# %% trusted=true
-sens_ibio
-
-# %% trusted=true
-# Ice-sheet-wide bloom time series
-ibio = [17.900000000000002, 179, 895, 1790]
-store = {}
-for ib in ibio:
-    print(ib)
-    sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
-    sens_ibio['x'] = mar.x
-    sens_ibio['y'] = mar.y
-    store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).median(dim=('x','y')).to_pandas()
-ibio_ts = pd.DataFrame(store)
-
-# %% trusted=true
-fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
-
-
-## Starting population
-
-# S6
-
-# Change names for legend
-ibio_s6.columns = [int(np.round(float(c))) for c in ibio_s6.columns]
-
-ibio_s6[str(year_coldest)].plot(
-    ax=axes[0,0],
-    legend=False,
-    colormap=sns.color_palette('flare', as_cmap=True)
-)
-axes[0,0].set_title('S6')
-
-handles, labels = axes[0,0].get_legend_handles_labels()
-axes[0,0].legend(
-    handles[::-1], labels[::-1],     
-    loc=(0.05,0.4), 
-    frameon=False, 
-#    title='Start pop.',
-    handlelength=1
-)
-
-ibio_s6[str(year_warmest)].plot(
-    ax=axes[1,0],
-    legend=False,
-    colormap=sns.color_palette('flare', as_cmap=True)
-)
-
-# Ice sheet wide
-
-ibio_ts[str(year_coldest)].plot(
-    ax=axes[0,1],
-    legend=False,
-    colormap=sns.color_palette('flare', as_cmap=True)
-)
-axes[0,1].set_title('Ice Sheet')
-
-ibio_ts[str(year_warmest)].plot(
-    ax=axes[1,1],
-    legend=False,
-    colormap=sns.color_palette('flare', as_cmap=True)
-)
-
-
-for ax in axes.flatten():
-    ax.set_ylim(0, 20000)
-    ax.set_xlabel('')
-
-plt.subplots_adjust(hspace=0.4)
-sns.despine()
-
-plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_startpop.pdf'), bbox_inches='tight')
-
-# %% [markdown] tags=[]
-# ### Sensitivity to loss term
-
-# %% trusted=true
-regenerate = True
-if regenerate:
-    ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
-    site_store = {}
-    gris_store = {}
-    for pl in ploss:
-        print(pl)
-        # sens_ploss = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
-        # sens_ploss['x'] = mar.x
-        # sens_ploss['y'] = mar.y
-        sens_ploss = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
-        gris_store[pl] = sens_ploss.cum_growth.where(mar.MSK > 50).where(sens_ploss.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
-        v = sens_ploss.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
-        site_store[pl] = v
-        
-    ploss_gris = pd.DataFrame(gris_store)
-    ploss_gris.to_csv(os.path.join(RESULTS, 'ploss_time_series_gris.csv'))
-    # Change names for legend
-    ploss_gris.columns = [str(int(float(c)*100))+'%' for c in ploss_gris.columns]
-
-    ploss_site = pd.DataFrame(site_store)
-    ploss_site.to_csv(os.path.join(RESULTS, 'ploss_time_series_S6.csv'))
-else:
-    pass
-    # ploss_quant90 = pd.read_csv(os.path.join(RESULTS, 'ploss_quant90.csv'), index_col=0, parse_dates=True)
-    # percs = [str(int(float(c)*100))+'%' for c in ploss_quant90.columns]
-    # ploss_quant90.columns = percs
-
-# %% trusted=true
-fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
-
-
-## Population loss
-
-# S6
-
-ploss_site[str(year_coldest)].plot(
-    ax=axes[0,0],
-    legend=False,
-    colormap=sns.color_palette('crest', as_cmap=True),
-    logy=True
-)
-axes[0,0].set_title('S6')
-
-ploss_site[str(year_warmest)].plot(
-    ax=axes[1,0],
-    legend=False,
-    colormap=sns.color_palette('crest', as_cmap=True),
-    logy=True
-)
-
-# Ice sheet wide
-
-ploss_gris[str(year_coldest)].plot(
-    ax=axes[0,1],
-    legend=False,
-    colormap=sns.color_palette('crest', as_cmap=True),
-    logy=True
-)
-axes[0,1].set_title('Ice Sheet')
-
-ploss_gris[str(year_warmest)].plot(
-    ax=axes[1,1],
-    legend=False,
-    colormap=sns.color_palette('crest', as_cmap=True),
-    logy=True
-)
-
-
-handles, labels = axes[1,1].get_legend_handles_labels()
-axes[1,1].legend(
-    loc=(1.05,0.05), 
-    frameon=False, 
-    handlelength=1
-)
-
-
-
-for ax in axes.flatten():
-    ax.set_ylim(0, 130000)
-    ax.set_xlabel('')
-
-plt.subplots_adjust(hspace=0.4)
-sns.despine()
-
-plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_ploss.pdf'), bbox_inches='tight')
 
 # %% [markdown]
 # ---
@@ -1348,5 +1424,210 @@ plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis.pdf'), bbox_inches='tight')
 # sens_ibio_test
 
 # sens_ibio_test.cum_growth.where(mar.MSK > 50).where(sens_ibio_test.cum_growth > 179).resample(TIME='1AS').sum().plot(col='TIME', col_wrap=4)
+
+# %% trusted=true
+
+# %% [markdown]
+# ### Sensitivity to starting biomass term (prior to May 2025)
+
+# %% trusted=true
+# Ice-sheet-wide quantile, annual values
+# regenerate = False
+# if regenerate:
+#     ibio = [17.900000000000002, 179, 895, 1790]
+#     store = {}
+#     for ib in ibio:
+#         print(ib)
+#         sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
+#         sens_ibio['x'] = mar.x
+#         sens_ibio['y'] = mar.y
+#         store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).resample(TIME='1AS').quantile(0.9, dim='TIME').median(dim=('x','y')).to_pandas()
+#     ibio_quant90 = pd.DataFrame(store)
+#     ibio_quant90.to_csv(os.path.join(RESULTS, 'ibio_quant90.csv'))
+# else:
+#     ibio_quant90 = pd.read_csv(os.path.join(RESULTS, 'ibio_quant90.csv'), index_col=0, parse_dates=True)
+#     ibio_quant90.columns = [int(np.round(float(c))) for c in ibio_quant90.columns]
+
+# %% trusted=true
+# Here, do the same analysis but with the more straightforward annual median of all maximum pop sizes
+# And also pull out time series of individual sites.
+ibio = [17.900000000000002, 179, 895, 1790]
+store = {}
+site_store = {}
+for ib in ibio:
+    print(ib)
+    sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
+    sens_ibio['x'] = mar.x
+    sens_ibio['y'] = mar.y
+    store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).resample(TIME='1AS').max(dim='TIME').median(dim=('x','y')).to_pandas()
+    
+    v = sens_ibio.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+    site_store[ib] = v
+ibio_max = pd.DataFrame(store)
+ibio_s6 = pd.DataFrame(site_store)
+
+# %% trusted=true
+sens_ibio
+
+# %% trusted=true
+# Ice-sheet-wide bloom time series
+ibio = [17.900000000000002, 179, 895, 1790]
+store = {}
+for ib in ibio:
+    print(ib)
+    sens_ibio = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'*_ibio{ib}.nc'))
+    sens_ibio['x'] = mar.x
+    sens_ibio['y'] = mar.y
+    store[ib] = sens_ibio.cum_growth.where(mar.MSK > 50).where(sens_ibio.cum_growth > ib).median(dim=('x','y')).to_pandas()
+ibio_ts = pd.DataFrame(store)
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
+
+
+## Starting population
+
+# S6
+
+# Change names for legend
+ibio_s6.columns = [int(np.round(float(c))) for c in ibio_s6.columns]
+
+ibio_s6[str(year_coldest)].plot(
+    ax=axes[0,0],
+    legend=False,
+    colormap=sns.color_palette('flare', as_cmap=True)
+)
+axes[0,0].set_title('S6')
+
+handles, labels = axes[0,0].get_legend_handles_labels()
+axes[0,0].legend(
+    handles[::-1], labels[::-1],     
+    loc=(0.05,0.4), 
+    frameon=False, 
+#    title='Start pop.',
+    handlelength=1
+)
+
+ibio_s6[str(year_warmest)].plot(
+    ax=axes[1,0],
+    legend=False,
+    colormap=sns.color_palette('flare', as_cmap=True)
+)
+
+# Ice sheet wide
+
+ibio_ts[str(year_coldest)].plot(
+    ax=axes[0,1],
+    legend=False,
+    colormap=sns.color_palette('flare', as_cmap=True)
+)
+axes[0,1].set_title('Ice Sheet')
+
+ibio_ts[str(year_warmest)].plot(
+    ax=axes[1,1],
+    legend=False,
+    colormap=sns.color_palette('flare', as_cmap=True)
+)
+
+
+for ax in axes.flatten():
+    ax.set_ylim(0, 20000)
+    ax.set_xlabel('')
+
+plt.subplots_adjust(hspace=0.4)
+sns.despine()
+
+plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_startpop.pdf'), bbox_inches='tight')
+
+# %% [markdown] tags=[]
+# ### Sensitivity to loss term (prior to May 2025)
+
+# %% trusted=true
+regenerate = True
+if regenerate:
+    ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
+    site_store = {}
+    gris_store = {}
+    for pl in ploss:
+        print(pl)
+        # sens_ploss = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
+        # sens_ploss['x'] = mar.x
+        # sens_ploss['y'] = mar.y
+        sens_ploss = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'*_ploss{pl}.nc'))
+        gris_store[pl] = sens_ploss.cum_growth.where(mar.MSK > 50).where(sens_ploss.cum_growth > START_POP).median(dim=('x','y')).to_pandas()
+        v = sens_ploss.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
+        site_store[pl] = v
+        
+    ploss_gris = pd.DataFrame(gris_store)
+    ploss_gris.to_csv(os.path.join(RESULTS, 'ploss_time_series_gris.csv'))
+    # Change names for legend
+    ploss_gris.columns = [str(int(float(c)*100))+'%' for c in ploss_gris.columns]
+
+    ploss_site = pd.DataFrame(site_store)
+    ploss_site.to_csv(os.path.join(RESULTS, 'ploss_time_series_S6.csv'))
+else:
+    pass
+    # ploss_quant90 = pd.read_csv(os.path.join(RESULTS, 'ploss_quant90.csv'), index_col=0, parse_dates=True)
+    # percs = [str(int(float(c)*100))+'%' for c in ploss_quant90.columns]
+    # ploss_quant90.columns = percs
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4.5, 4))
+
+
+## Population loss
+
+# S6
+
+ploss_site[str(year_coldest)].plot(
+    ax=axes[0,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,0].set_title('S6')
+
+ploss_site[str(year_warmest)].plot(
+    ax=axes[1,0],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+# Ice sheet wide
+
+ploss_gris[str(year_coldest)].plot(
+    ax=axes[0,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+axes[0,1].set_title('Ice Sheet')
+
+ploss_gris[str(year_warmest)].plot(
+    ax=axes[1,1],
+    legend=False,
+    colormap=sns.color_palette('crest', as_cmap=True),
+    logy=True
+)
+
+
+handles, labels = axes[1,1].get_legend_handles_labels()
+axes[1,1].legend(
+    loc=(1.05,0.05), 
+    frameon=False, 
+    handlelength=1
+)
+
+
+
+for ax in axes.flatten():
+    ax.set_ylim(0, 130000)
+    ax.set_xlabel('')
+
+plt.subplots_adjust(hspace=0.4)
+sns.despine()label_panel(ax[0], 'a')
+
+plt.savefig(os.path.join(RESULTS, 'fig_sens_analysis_ploss.pdf'), bbox_inches='tight')
 
 # %% trusted=true
