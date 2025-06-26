@@ -94,7 +94,8 @@ def run_model_annual(prod_hrs, initial_bio, percent_loss):
     bio = deepcopy(initial_bio)
     
     store_cum_growth = []
-    store_today_production = []
+    store_today_gross_prod = []
+    store_today_net_prod = []
     for day in prod_hrs.TIME:
 
         hours = prod_hrs.sel(TIME=day)
@@ -114,7 +115,8 @@ def run_model_annual(prod_hrs, initial_bio, percent_loss):
         # 1. add today's growth to pop
         cum_growth = bio + today_production
         # 2. Remove the losses
-        cum_growth = cum_growth - (cum_growth * percent_loss)
+        L = (cum_growth * percent_loss)
+        cum_growth = cum_growth - L
         # 3. Do not allow pop size to fall below initial value
         cum_growth = cum_growth.where(cum_growth > initial_bio, initial_bio)
 
@@ -125,13 +127,19 @@ def run_model_annual(prod_hrs, initial_bio, percent_loss):
 
         cum_growth = cum_growth.expand_dims({'TIME':[day.values]})
 
+        # Net daily production
+        net_today_prod = np.maximum(0, today_production - L)
+        net_today_prod.name = 'today_prod_net'
+
         store_cum_growth.append(deepcopy(cum_growth))
-        store_today_production.append(deepcopy(today_production))
+        store_today_gross_prod.append(deepcopy(today_production))
+        store_today_net_prod.append(deepcopy(net_today_prod))
 
     cum_growth = xr.concat(store_cum_growth, dim='TIME')
-    daily_production = xr.concat(store_today_production, dim='TIME')
+    daily_production = xr.concat(store_today_gross_prod, dim='TIME')
+    daily_net_production = xr.concat(store_today_net_prod, dim='TIME')
     
-    return (cum_growth, daily_production)
+    return (cum_growth, daily_production, daily_net_production)
 
 
 # Inverse cumulative distribution function for the triangular distribution
@@ -229,9 +237,9 @@ if __name__ == '__main__':
 
             bio = xr.DataArray(initial_bio, dims=('y', 'x'),coords={'y':hours.y, 'x':hours.x})
 
-            cg, dp = run_model_annual(hours, bio, row['ploss'])
+            cg, dp, Gn = run_model_annual(hours, bio, row['ploss'])
 
-            full_out = xr.merge([hours, cg, dp])
+            full_out = xr.merge([hours, cg, dp, Gn])
             
             full_out.attrs['exp_id'] = i
             full_out.attrs['param_swd'] = row['SWd_wm2']
