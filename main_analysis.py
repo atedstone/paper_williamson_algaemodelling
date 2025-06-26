@@ -47,6 +47,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 from matplotlib import dates
 from matplotlib import rcParams
+import matplotlib.image as mpimg
 
 import cartopy.crs as ccrs
 import seaborn as sns
@@ -55,7 +56,19 @@ sns.set_context('paper')
 rcParams['font.family'] = 'Arial'
 rcParams['font.size'] = 7
 
-# %% trusted=true
+
+SMALL_SIZE = 8
+MEDIUM_SIZE = 8
+BIGGER_SIZE = 8
+plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
+plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
+plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+
+# %% trusted=true scrolled=true
 from dask.distributed import LocalCluster as MyCluster
 from dask.distributed import Client
 cluster = MyCluster()
@@ -88,7 +101,7 @@ WORK_ROOT = '/work/atedstone/williamson/'
 # A 'reference' MAR output, mainly for the mask and georeferencing
 MAR_REF = os.path.join(WORK_ROOT, 'MARv3.14.0-10km-daily-ERA5-2022.nc')
 # DEM file specific to this project
-DEM_FILE = os.path.join(WORK_ROOT, 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif')
+DEM_FILE = os.path.join(GIS_ROOT, 'GIMPDEM', 'gimpdem_90m_v01.1_EPSG3413_grisonly_filled_2km.tif')
 
 # Generic GIS requirements
 BASINS_FILE = os.path.join(GIS_ROOT, 'doi_10.7280_D1WT11__v1/Greenland_Basins_PS_v1_4_2_regions/Greenland_Basins_PS_v1_4_2_regions.shp')
@@ -115,6 +128,8 @@ EXPTS_DESIGN_FN = os.path.join(MODEL_OUTPUTS_MAIN, 'expt_parameters_ibio179.csv'
 # Save location for figures, CSV files
 RESULTS = os.path.join(WORK_ROOT, 'results')
 
+CRS = 'epsg:3413'
+
 # %% trusted=true
 # Growth model start and end
 YR_ST = 2000
@@ -139,8 +154,92 @@ def open_model_run(path):
     run['y'] = mar.y
     return run
 
+## SENSITIVITIES ANALYSIS 
+def sensitivities_extract(fn_input, fn_output, values, geom, metric):
+    """
+    fn_input : path to netcdf files, with a {v} position left vacant
+    fn_output : path to output csv, with {param} vacant
+    values : List of parameter values to iterate
+    geom : Point to extract
+
+    Extracts time series of
+    - daily population size
+    - Net daily growth
+    - last bloom day of year
+    Saves all to CSV.
+    """
+    
+    def _to_df(data_dict, fn, metric):   
+        df = pd.DataFrame(data_dict)
+        # Format the columns nicely
+        if metric == 'ibio':
+            df.columns = [int(np.round(float(c))) for c in df.columns]
+        elif metric == 'ploss':
+            df.columns = [str(int(float(c)*100))+'%' for c in df.columns]
+        df.to_csv(fn)
+        return df
+        
+    site_store_pop = {}
+    site_store_Gn = {}
+    last_bloom_doy = {}
+    for p in values:
+        sens = open_model_run(fn_input.format(v=p))          
+        v = sens.sel(x=geom.x, y=geom.y, method='nearest')
+        site_store_pop[p] = v.cum_growth.to_pandas()
+        site_store_Gn[p] = v.today_prod_net.to_pandas()
+        v['TIME'] = v['TIME.dayofyear']
+        last_bloom_doy[p] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
+    _ = _to_df(site_store_pop, fn_output.format(param='popsize'), metric)
+    _ = _to_df(site_store_Gn, fn_output.format(param='Gn'), metric)
+    pd.Series(last_bloom_doy).to_csv(fn_output.format(param='lastbloom'))
+    return 
+
+def bloom_start(ts, startpop=179, n=3):
+    """
+    Determine bloom start day of year.
+
+    ts : time series (pd.DataFrame, may be multiple columns)
+    startpop : starting/background population ng DW ml-1
+    n : number of days of continuity to require when identifying start date.
+
+    returns pd.Series of dates
+    """
+
+    def _roll(ts, n=n):
+        return np.minimum(
+            np.maximum(0, 
+                       (ts.sum(axis=0) - n) + 1
+                      ),
+            1
+        )
+
+    # Work on copy of dataframe
+    ts = ts.copy()
+    # Convert series of pops to boolean
+    ts = (ts > startpop)
+    # Apply rolling while index is still datetime64
+    r = ts.rolling(f'{n}D').apply(_roll)
+    # Convert to DOY
+    r.index = r.index.dayofyear
+    return r.idxmax()
+
+def active_bloom_sum(df, start_dates, end_dates):
+    """ Sum the active bloom biomass, i.e. that between the start and end dates.
+
+    Where df is 1...n columns of model outputs.
+    """
+    vals = {}
+    for c in df.columns:
+        tmp = deepcopy(df[c])
+        tmp.index = tmp.index.dayofyear
+        clipped = tmp[(tmp.index >= start_dates[c] ) & (tmp.index <= end_dates[c])]
+        vals[c] = clipped.sum()
+    return pd.Series(vals)
+
+## ------------------------------------------------------------------------
+## QMC ANALYSIS
 def get_qmc_ts(year, geom=None, qm_metrics=False, nqmc=NQMC):
-    """ Return time series from each QMC run. 
+    """ Return time series of daily population size and daily net growth from each QMC run. 
 
     By default, returns a daily median pd.DataFrame computed from all pixels in the ice sheet domain, one column per QMC run.
 
@@ -149,7 +248,8 @@ def get_qmc_ts(year, geom=None, qm_metrics=False, nqmc=NQMC):
     If qm_metrics=True then provide additional QMC metrics relating to MC performance.
     """
     # Time-series results
-    qmc = {}
+    pop = {}
+    Gn = {}
     
     if qm_metrics:
         # Bloom max of each experiment
@@ -160,7 +260,7 @@ def get_qmc_ts(year, geom=None, qm_metrics=False, nqmc=NQMC):
         sd_sd = []
 
     for exp in range(1, nqmc+1):
-        #print(exp)
+        print(exp)
         # Open the numbered experiment
         r = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'model_outputs_{year}_exp{exp}.nc'))
         # If subset to Point requested then do this now
@@ -170,24 +270,30 @@ def get_qmc_ts(year, geom=None, qm_metrics=False, nqmc=NQMC):
         incl = r.cum_growth.where(r.cum_growth > START_POP).count(dim='TIME')
         # Reduce to 1-D timeseries
         ts = r.cum_growth.where(mar.MSK > 50).where(incl > 1).median(dim=('x','y')).to_pandas() #.where(r.cum_growth > START_POP)
+        ts_net_daily_growth = r.today_prod_net.where(mar.MSK > 50).where(incl > 1).median(dim=('x','y')).to_pandas()
         if qm_metrics:
             # Append the metrics
             bmax.append(ts.max())
             sd.append(np.std(bmax))
             sd_sd.append(np.std(sd))
         # Save the time series
-        qmc[exp] = ts
-        qmc[exp].name = f'exp{exp}'
+        pop[exp] = ts
+        pop[exp].name = f'exp{exp}'
+        Gn[exp] = ts_net_daily_growth
+        Gn[exp].name = f'exp{exp}'
 
-    t = pd.concat(qmc, axis=1)
+    pop = pd.concat(pop, axis=1)
+    Gn = pd.concat(Gn, axis=1)
     if qm_metrics:
-        return (t, 
+        return (pop, Gn,
                 bmax, 
                 sd, 
                 sd_sd)
     else:
-        return t
+        return (pop, Gn)
 
+## -----------------------------------------------------------
+## GENERIC FUNCTIONS
 def doy_to_datetime(year, doy):
     return dt.datetime(year, 1, 1) + dt.timedelta(doy - 1)
     
@@ -200,6 +306,25 @@ def dw_to_ww(dw):
     """ Dry weight (e.g. from model) to cells per ml """
     # assuming 0.84 ng DW per cell (C.W. Feb 2024)
     return dw / 0.84
+
+def to_kgDWgrid(x, grid_km=10):
+    """ Convert from ng DW ml to ng DW of algae in each grid cell. """
+    #ng DW mL to ng DW L
+    x = x * 1000
+ 
+    #ng DW L to ng DW m2 (using Williamson et al 2018 measured conversion factor)
+    x = x * 1.061
+ 
+    #ng DW m2 to ng DW per km2
+    x = x * 10**6
+ 
+    #ng DW km2 to kg DW km2
+    x = x * 10**-12 #10 to the power of minus 12
+ 
+    #kg DW km2 to kg DW per pixel
+    x = x * grid_km**2
+
+    return x
 
 def to_carbon(x, grid_km=10):
     """ 
@@ -238,6 +363,11 @@ def to_carbon(x, grid_km=10):
 # %% trusted=true
 UNIT_DW = r'ng DW ml$^{-1}$'
 UNIT_WW = r'cells ml$^{-1}$'
+#UNIT_DW_TOT =  #r'Tot. $G_N$ (kg DW)'
+
+LABEL_P = '$P$ (%s)' %UNIT_DW
+LABEL_PMAX = '$P_{MAX}$ (%s)' %UNIT_DW
+LABEL_TOT_GN_PX = r'$\Sigma G_N$ (kg DW in 10$^2$ km)'
 
 def label_panel(ax, letter, xy=(0.04,0.93)):
     ax.annotate(letter.upper(), fontweight='bold', xy=xy, xycoords='axes fraction',
@@ -354,95 +484,180 @@ basins
 year = 2016
 regenerate = False
 
-fn_ibio = os.path.join(RESULTS, 'sens_analysis_s6_ibio.csv')
-fn_ploss = os.path.join(RESULTS, 'sens_analysis_s6_ploss.csv')
+fn_ibio_results = os.path.join(RESULTS, 'sens_analysis_s6_ibio_{param}.csv')
+fn_ploss_results = os.path.join(RESULTS, 'sens_analysis_s6_ploss_{param}.csv')
 
+###########################
 if regenerate:
     print('Regenerating....')
+    
     ibio = [17.900000000000002, 179, 895, 1790]
-    site_store = {}
-    for ib in ibio:
-        sens_ibio = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_IBIO, f'model_outputs_{year}_ploss0.1_ibio{ib}.nc'))          
-        v = sens_ibio.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
-        site_store[ib] = v
-    ibio_site = pd.DataFrame(site_store)
-    ibio_site.columns = [int(np.round(float(c))) for c in ibio_site.columns]
-    ibio_site.to_csv(fn_ibio)
+    fn_ibio = os.path.join(MODEL_OUTPUTS_SENS_IBIO, 'model_outputs_{year}_ploss0.1_ibio{{v}}.nc'.format(year=year))
+    _ = sensitivities_extract(fn_ibio, fn_ibio_results, ibio, pts_ps.loc['S6'].geometry, 'ibio')
 
     ploss = [0, 0.01, 0.02, 0.05, 0.10, 0.15, 0.5]
-    site_store = {}
-    for pl in ploss:
-        sens_ploss = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_PLOS, f'model_outputs_{year}*_ploss{pl}.nc'))
-        v = sens_ploss.cum_growth.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest').to_pandas()
-        site_store[pl] = v  
-    ploss_site = pd.DataFrame(site_store)
-    ploss_site.columns = [str(int(float(c)*100))+'%' for c in ploss_site.columns]
-    ploss_site.to_csv(fn_ploss)
+    fn_ploss = os.path.join(MODEL_OUTPUTS_SENS_PLOS, 'model_outputs_{year}*_ploss{{v}}.nc'.format(year=year))
+    _ = sensitivities_extract(fn_ploss, fn_ploss_results, ploss, pts_ps.loc['S6'].geometry, 'ploss')
 else:
     print('INFO...using cached results (not regenerated)')
-    
-ibio_site = pd.read_csv(fn_ibio, index_col=0, parse_dates=True)
-ploss_site = pd.read_csv(fn_ploss, index_col=0, parse_dates=True)
+###########################
+
+ibio_site_pop = pd.read_csv(fn_ibio_results.format(param='popsize'), index_col=0, parse_dates=True)
+ibio_site_Gn = pd.read_csv(fn_ibio_results.format(param='Gn'), index_col=0, parse_dates=True)
+ibio_site_end = pd.read_csv(fn_ibio_results.format(param='lastbloom'), index_col=0, parse_dates=True).squeeze()
+ibio_site_end.index = ibio_site_end.index.astype(str)
+# Fix columns to the same as those specified as columns in sensitivities_extract()
+ibio_site_end.index = [str(int(np.round(float(i)))) for i in ibio_site_end.index]
+
+ploss_site_pop = pd.read_csv(fn_ploss_results.format(param='popsize'), index_col=0, parse_dates=True)
+ploss_site_Gn = pd.read_csv(fn_ploss_results.format(param='Gn'), index_col=0, parse_dates=True)
+ploss_site_end = pd.read_csv(fn_ploss_results.format(param='lastbloom'), index_col=0, parse_dates=True).squeeze()
+ploss_site_end.index = ploss_site_end.index.astype(str)
+# Fix columns
+ploss_site_end.index = [str(int(float(c)*100))+'%' for c in ploss_site_end.index]
+
+
+# Find the start of each bloom
+ibio_start = bloom_start(ibio_site_pop)
+ploss_start = bloom_start(ploss_site_pop)
+
+# Use start of each bloom to calculate net growth
+ibio_sum = to_kgDWgrid(active_bloom_sum(ibio_site_Gn, ibio_start, ibio_site_end))
+ploss_sum = to_kgDWgrid(active_bloom_sum(ploss_site_Gn, ploss_start, ploss_site_end))
 
 
 
-
-# ADD BLOOM DURATION with shading
-
-
-fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(6.5, 2))
+## Start plotting
+letgen = letters()
+fig = plt.figure(figsize=(6,4))
+# rows, cols
+gs = fig.add_gridspec(2,3)
 
 # Starting population
-ibio_site.plot(
-    ax=axes[0],
-    legend=False,
-    colormap=sns.color_palette('flare', as_cmap=True),
-    logy=True
+cmap_ibio = sns.color_palette('flare', n_colors=len(ibio_sum))
+ax_ibio_pop = fig.add_subplot(gs[0, 0:2])
+sns.lineplot(
+    data=ibio_site_pop,
+    ax=ax_ibio_pop,
+    palette=cmap_ibio,
+    dashes=False,
+    legend=False
 )
-#m = dates.MonthLocator() 
-#axes[0].xaxis.set_major_locator(m)
-#axes[0].xaxis.set_major_formatter(dates.DateFormatter('%b'))
+ax_ibio_pop.set_yscale('log')
+#handles, labels = ax_ibio_pop.get_legend_handles_labels()
+# ax_ibio_pop.legend(
+#     handles[::-1], labels[::-1],     
+#     loc=(1,0.4), 
+#     frameon=False, 
+#     title='Start pop.',
+#     handlelength=1
+# )
+label_panel(ax_ibio_pop, next(letgen))
+ax_ibio_pop.set_ylabel(LABEL_P)
 
-#axes[0,0].set_title('S6')
-handles, labels = axes[0].get_legend_handles_labels()
-axes[0].legend(
-    handles[::-1], labels[::-1],     
-    loc=(1,0.4), 
-    frameon=False, 
-    title='Start pop.',
-    handlelength=1
-)
-label_panel(axes[0], 'a')
-axes[0].set_ylabel('Pop. size (ng DW ml$^{-1}$)')
+# Add text labels to each line
+n = 0
+for p in ibio_site_pop.columns:
+    if p == '179':
+        xloc = dt.datetime(2016,10,11)
+    else:
+        xloc = dt.datetime(2016,10,3)
 
+    ax_ibio_pop.text(xloc, ibio_site_pop[p].iloc[-1], p, 
+                     color=cmap_ibio[n],
+                     va='center_baseline', ha='left'
+                    )
+    n += 1
+
+# ----------
+ax_ibio_Gn = fig.add_subplot(gs[0, 2])
+ax_ibio_Gn.bar(np.arange(0, len(ibio_sum)),ibio_sum, color=cmap_ibio)
+ax_ibio_Gn.set_xticks(np.arange(0, len(ibio_sum)), ibio_sum.index)
+ax_ibio_Gn.set_ylabel(LABEL_TOT_GN_PX)
+ax_ibio_Gn.set_xlabel('$P_{(t=0)}$ (%s)' %UNIT_DW)
+ax_ibio_Gn.set_ylim(0, 2700)
+label_panel(ax_ibio_Gn, next(letgen))
+
+# --------------
 # Ploss
-ploss_site.plot(
-    ax=axes[1],
-    legend=False,
-    colormap=sns.color_palette('crest', as_cmap=True),
-    logy=True
+cmap_ploss = sns.color_palette('crest', n_colors=len(ploss_sum))
+ax_ploss_pop = fig.add_subplot(gs[1, 0:2])
+sns.lineplot(
+    data=ploss_site_pop,
+    ax=ax_ploss_pop,
+    palette=cmap_ploss,
+    dashes=False,
+    legend=False
 )
-handles, labels = axes[1].get_legend_handles_labels()
-axes[1].legend(
-    handles, labels,     
-    loc=(1,0.1), 
-    frameon=False, 
-    title='Loss %',
-    handlelength=1
-)
-label_panel(axes[1], 'b')
+ax_ploss_pop.set_yscale('log')
+# ploss_site_pop.plot(
+#     ax=ax_ploss_pop,
+#     legend=False,
+#     colormap=sns.color_palette('crest', as_cmap=True),
+#     logy=True
+# )
+ax_ploss_pop.set_ylabel(LABEL_P)
+# handles, labels = ax_ploss_pop.get_legend_handles_labels()
+# ax_ploss_pop.legend(
+#     handles, labels,     
+#     loc=(1,0.1), 
+#     frameon=False, 
+#     title='Loss %',
+#     handlelength=1
+# )
+label_panel(ax_ploss_pop, next(letgen))
 
-for ax in axes.flatten():
+# Add text labels to each line
+n = 0
+for p in ploss_site_pop.columns:
+    ydelta = 0
+    xloc = dt.datetime(2016,10,3)
+    if p == '10%':
+        ydelta = 150
+        xloc = dt.datetime(2016,9,29)
+    
+    if p == '15%':
+        xloc = dt.datetime(2016,9,12)
+        ydelta = 150
+        
+    ax_ploss_pop.text(xloc, ploss_site_pop[p].iloc[-1]+ydelta, p, 
+                     color=cmap_ploss[n],
+                     va='center', ha='left'
+                    )
+    n += 1
+
+
+# ------------
+ax_ploss_Gn = fig.add_subplot(gs[1, 2])
+#sns.barplot(data=ploss_sum, ax=ax_ploss_Gn)
+ax_ploss_Gn.bar(np.arange(0, len(ploss_sum)),ploss_sum, color=cmap_ploss)
+ax_ploss_Gn.set_xticks(np.arange(0, len(ploss_sum)), [int(v[:-1]) for v in ploss_sum.index])
+ax_ploss_Gn.set_ylabel(LABEL_TOT_GN_PX)
+ax_ploss_Gn.set_xlabel(r'$\Theta$ (%)')
+label_panel(ax_ploss_Gn, next(letgen))
+
+
+# ------------
+for ax in [ax_ibio_pop, ax_ploss_pop]:
     ax.set_ylim(0, 120000)
     ax.set_xlabel('')
 
-plt.subplots_adjust(wspace=0.7)
+plt.tight_layout()
+#plt.subplots_adjust(wspace=0.7)
 sns.despine()
 
 plt.savefig(os.path.join(RESULTS, 'fig_phenological.pdf'), bbox_inches='tight')
 
 # %% trusted=true
-ibio_site.index
+# ax_ibio_Gn.text?
+
+# %% trusted=true
+
+# %% trusted=true
+sns.color_palette('flare', n_colors=len(ibio_sum), as_cmap=True)
+
+# %% trusted=true
+# sns.color_palette?
 
 # %% [markdown]
 # ### Fig. 2: Sensitivity to environmental parameters
@@ -451,168 +666,157 @@ ibio_site.index
 year = 2016
 regenerate = False
 
-fn_sd = os.path.join(RESULTS, 'sens_analysis_s6_snowdepth.csv')
-fn_li = os.path.join(RESULTS, 'sens_analysis_s6_swd.csv')
-fn_t = os.path.join(RESULTS, 'sens_analysis_s6_temperature.csv')
+fn_sd = os.path.join(RESULTS, 'sens_analysis_s6_snowdepth_{param}.csv')
+fn_li = os.path.join(RESULTS, 'sens_analysis_s6_swd_{param}.csv')
+fn_t = os.path.join(RESULTS, 'sens_analysis_s6_temperature_{param}.csv')
 
 
 if regenerate:
 
-    # Snow depth
-    depths = [0.01, 0.05, 0.10, 0.2, 0.4, 0.8]
-    site_store = {}
-    last_active_bloom = {}
-    for d in depths:
-        sens_sd = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_SNOW, f'model_outputs_{year}_ibio179_ploss0.1_snow{d}.nc'))
-        v = sens_sd.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
-        site_store[d] = v.cum_growth.to_pandas()
-        v['TIME'] = v['TIME.dayofyear']
-        last_active_bloom[d] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
-    sd_site = pd.DataFrame(site_store)
-    sd_site.to_csv(fn_sd)
-    pd.Series(last_active_bloom).to_csv(fn_sd[:-4] + '_lastbloom.csv')
+    depths = [0.01, 0.05, 0.10, 0.2, 0.4, 0.8]    
+    fn_snow = os.path.join(MODEL_OUTPUTS_SENS_SNOW, 'model_outputs_{year}_ibio179_ploss0.1_snow{{v}}.nc'.format(year=year))
+    _ = sensitivities_extract(fn_snow, fn_sd, depths, pts_ps.loc['S6'].geometry, 'sd')
 
-    # SWd
     lights = [1, 10, 100, 200]
-    site_store = {}
-    last_active_bloom = {}
-    for li in lights:
-        sens_li = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_LIGH, f'model_outputs_{year}_ibio179_ploss0.1_light{li}.nc'))
-        v = sens_li.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
-        site_store[li] = v.cum_growth.to_pandas()
-        v['TIME'] = v['TIME.dayofyear']
-        last_active_bloom[li] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
-    li_site = pd.DataFrame(site_store)
-    li_site.to_csv(fn_li)
-    pd.Series(last_active_bloom).to_csv(fn_li[:-4] + '_lastbloom.csv')
-
-    # Temperature
+    fn_light = os.path.join(MODEL_OUTPUTS_SENS_LIGH, 'model_outputs_{year}_ibio179_ploss0.1_light{{v}}.nc'.format(year=year))
+    _ = sensitivities_extract(fn_light, fn_li, lights, pts_ps.loc['S6'].geometry, 'swd')
+    
     temps = [0, 0.25, 0.5, 1.0]
-    site_store = {}
-    last_active_bloom = {}
-    for t in temps:
-        sens_t = open_model_run(os.path.join(MODEL_OUTPUTS_SENS_TEMP, f'model_outputs_{year}_ibio179_ploss0.1_temp{t}.nc'))
-        v = sens_t.sel(x=pts_ps.loc['S6'].geometry.x, y=pts_ps.loc['S6'].geometry.y, method='nearest')
-        site_store[t] = v.cum_growth.to_pandas()
-        v['TIME'] = v['TIME.dayofyear']
-        last_active_bloom[t] = v.today_prod.cumsum(dim='TIME').idxmax(dim='TIME').values
-    t_site = pd.DataFrame(site_store)
-    t_site.to_csv(fn_t)
-    pd.Series(last_active_bloom).to_csv(fn_t[:-4] + '_lastbloom.csv')
+    fn_temp = os.path.join(MODEL_OUTPUTS_SENS_TEMP, 'model_outputs_{year}_ibio179_ploss0.1_temp{{v}}.nc'.format(year=year))
+    _ = sensitivities_extract(fn_temp, fn_t, temps, pts_ps.loc['S6'].geometry, 'T')
+    
+# Read in all data sets generated above.
+sd_site_popsize = pd.read_csv(fn_sd.format(param='popsize'), index_col=0, parse_dates=True)
+li_site_popsize = pd.read_csv(fn_li.format(param='popsize'), index_col=0, parse_dates=True)
+t_site_popsize = pd.read_csv(fn_t.format(param='popsize'), index_col=0, parse_dates=True)
 
-sd_site = pd.read_csv(fn_sd, index_col=0, parse_dates=True)
-li_site = pd.read_csv(fn_li, index_col=0, parse_dates=True)
-t_site = pd.read_csv(fn_t, index_col=0, parse_dates=True)
+sd_site_Gn = pd.read_csv(fn_sd.format(param='Gn'), index_col=0, parse_dates=True)
+li_site_Gn = pd.read_csv(fn_li.format(param='Gn'), index_col=0, parse_dates=True)
+t_site_Gn = pd.read_csv(fn_t.format(param='Gn'), index_col=0, parse_dates=True)
 
-sd_site_end = pd.read_csv(fn_sd[:-4] + '_lastbloom.csv', index_col=0, parse_dates=True).squeeze()
+sd_site_end = pd.read_csv(fn_sd.format(param='lastbloom'), index_col=0, parse_dates=True).squeeze()
 sd_site_end.index = sd_site_end.index.astype(str)
-li_site_end = pd.read_csv(fn_li[:-4] + '_lastbloom.csv', index_col=0, parse_dates=True).squeeze()
+li_site_end = pd.read_csv(fn_li.format(param='lastbloom'), index_col=0, parse_dates=True).squeeze()
 li_site_end.index = li_site_end.index.astype(str)
-t_site_end = pd.read_csv(fn_t[:-4] + '_lastbloom.csv', index_col=0, parse_dates=True).squeeze()
+t_site_end = pd.read_csv(fn_t.format(param='lastbloom'), index_col=0, parse_dates=True).squeeze()
 t_site_end.index = t_site_end.index.astype(str)
 
-
 # %% trusted=true
-def bloom_start(ts, startpop=179, n=3):
-    """
-    Determine bloom start day of year.
+# First find the start of each bloom
+t_start = bloom_start(t_site_popsize)
+sd_start = bloom_start(sd_site_popsize)
+li_start = bloom_start(li_site_popsize)
 
-    ts : time series (pd.DataFrame, may be multiple columns)
-    startpop : starting/background population ng DW ml-1
-    n : number of days of continuity to require when identifying start date.
-
-    returns pd.Series of dates
-    """
-
-    def _roll(ts, n=n):
-        return np.minimum(
-            np.maximum(0, 
-                       (ts.sum(axis=0) - n) + 1
-                      ),
-            1
-        )
-
-    # Work on copy of dataframe
-    ts = ts.copy()
-    # Convert series of pops to boolean
-    ts = (ts > startpop)
-    # Apply rolling while index is still datetime64
-    r = ts.rolling(f'{n}D').apply(_roll)
-    # Convert to DOY
-    r.index = r.index.dayofyear
-    return r.idxmax()
-
-
-t_start = bloom_start(t_site)
-sd_start = bloom_start(sd_site)
-li_start = bloom_start(li_site)
-
-
+# Calculate the bloom duration
 t_dur = t_site_end - t_start
 sd_dur = sd_site_end - sd_start
 li_dur = li_site_end - li_start
 
+# Use start of each bloom to calculate net growth
+t_sum = to_kgDWgrid(active_bloom_sum(t_site_Gn, t_start, t_site_end))
+sd_sum = to_kgDWgrid(active_bloom_sum(sd_site_Gn, sd_start, sd_site_end))
+li_sum = to_kgDWgrid(active_bloom_sum(li_site_Gn, li_start, li_site_end))
+
 
 # %% trusted=true
-t_site_end
 
-# %% trusted=true
-from copy import deepcopy
+fig = plt.figure(figsize=(4.5, 3.5))
 
-def active_bloom_sum(df, start_dates, end_dates):
-    vals = {}
-    for c in df.columns:
-        tmp = deepcopy(df[c])
-        tmp.index = tmp.index.dayofyear
-        clipped = tmp[(tmp.index >= start_dates[c] ) & (tmp.index <= end_dates[c])]
-        vals[c] = clipped.sum()
-    return pd.Series(vals)
+# nrows, ncols
+gs = fig.add_gridspec(2,2)
 
-t_sum = active_bloom_sum(t_site, t_start, t_site_end)
-sd_sum = active_bloom_sum(sd_site, sd_start, sd_site_end)
-li_sum = active_bloom_sum(li_site, li_start, li_site_end)
-
-# %% trusted=true
-fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(7.5, 2))
+letgen = letters()
 
 labels = ['T', 'Sn', 'SWD']
+col_t = sns.color_palette(palette='Oranges', n_colors=5)[1:]
+col_sd = sns.color_palette(palette='Blues', n_colors=7)[1:]
+col_li = sns.color_palette(palette='Greens', n_colors=5)[1:]
 
 
 # Ax Bloom onset 
-axes[0].plot([1]*len(t_site.columns), t_start, 'o')
-axes[0].plot([2]*len(sd_site.columns), sd_start, 'o')
-axes[0].plot([3]*len(li_site.columns), li_start, 'o')
-axes[0].xaxis.set_ticks([1,2,3], labels)
-axes[0].set_ylabel('Bloom start (DOY)')
+ax1 = fig.add_subplot(gs[0, 0])
+ax1.scatter([1]*len(t_site_popsize.columns), t_start, marker='o', c=col_t)
+ax1.scatter([2]*len(sd_site_popsize.columns), sd_start, marker='o', c=col_sd)
+ax1.scatter([3]*len(li_site_popsize.columns), li_start, marker='o', c=col_li)
+ax1.xaxis.set_ticks([1,2,3], labels)
+ax1.set_ylabel('Bloom start (DOY)')
+label_panel(ax1, next(letgen), xy=(0.09,0.93))
 
 # Ax Bloom duration
-axes[1].plot([1]*len(t_site.columns), t_dur, 'o')
-axes[1].plot([2]*len(sd_site.columns), sd_dur, 'o')
-axes[1].plot([3]*len(li_site.columns), li_dur, 'o')
-axes[1].xaxis.set_ticks([1,2,3], labels)
-axes[1].set_ylabel('Bloom duration (days)')
+ax2 = fig.add_subplot(gs[0, 1])
+ax2.scatter([1]*len(t_site_popsize.columns), t_dur, marker='o', c=col_t)
+ax2.scatter([2]*len(sd_site_popsize.columns), sd_dur, marker='o', c=col_sd)
+ax2.scatter([3]*len(li_site_popsize.columns), li_dur, marker='o', c=col_li)
+ax2.xaxis.set_ticks([1,2,3], labels)
+ax2.set_ylabel('Bloom duration (days)')
+ax2.yaxis.set_ticks([80, 100, 120])
+label_panel(ax2, next(letgen), xy=(0.09,0.93))
 
 # Ax Max bloom size
-axes[2].plot([1]*len(t_site.columns), t_site.max(), 'o')
-axes[2].plot([2]*len(sd_site.columns), sd_site.max(), 'o')
-axes[2].plot([3]*len(li_site.columns), li_site.max(), 'o')
-axes[2].xaxis.set_ticks([1,2,3], labels)
-axes[2].set_ylabel('Max. pop size (ng DW ml-1)')
+ax3 = fig.add_subplot(gs[1, 0])
+ax3.scatter([1]*len(t_site_popsize.columns), t_site_popsize.max(), marker='o', c=col_t)
+ax3.scatter([2]*len(sd_site_popsize.columns), sd_site_popsize.max(), marker='o', c=col_sd)
+ax3.scatter([3]*len(li_site_popsize.columns), li_site_popsize.max(), marker='o', c=col_li)
+ax3.xaxis.set_ticks([1,2,3], labels)
+ax3.set_ylabel(LABEL_PMAX)
+ax3.yaxis.set_ticks([8000, 12000, 16000])
+label_panel(ax3, next(letgen), xy=(0.09,0.93))
 
 # Sum of bloom during active period
 # Can't use simple sum, needs to be sum of active bloom period.
-axes[3].plot([1]*len(t_sum), t_sum, 'o')
-axes[3].plot([2]*len(sd_sum), sd_sum, 'o')
-axes[3].plot([3]*len(li_sum), li_sum, 'o')
-axes[3].xaxis.set_ticks([1,2,3], labels)
-axes[3].set_ylabel('Tot. pop size (ng DW ml-1)')
+ax4 = fig.add_subplot(gs[1, 1])
+ax4.scatter([1]*len(t_sum), t_sum, marker='o', c=col_t)
+ax4.scatter([2]*len(sd_sum), sd_sum, marker='o', c=col_sd)
+ax4.scatter([3]*len(li_sum), li_sum, marker='o', c=col_li)
+ax4.xaxis.set_ticks([1,2,3], labels)
+#ax4.yaxis.set_ticks([4.0e5, 6.0e5, 8.0e5, 1.0e6])
+ax4.set_ylabel(LABEL_TOT_GN_PX)
+label_panel(ax4, next(letgen), xy=(0.09,0.93))
 
 sns.despine()
+
+
+
+import matplotlib.patches as mpatches
+
+def build_legend_handles(colors, labels):
+    handles = []
+    # handles is a list, so append manual patch
+    for c,l in zip(colors, labels):
+        handles.append(mpatches.Patch(color=c, label=l))
+    return handles
+
+# plot the legend
+leg_t = fig.legend(handles=build_legend_handles(col_t, t_site_popsize.columns), bbox_to_anchor=(1.17, 1.), frameon=False, title=r'T $^{o}C$')
+leg_sd = fig.legend(handles=build_legend_handles(col_sd, sd_site_popsize.columns), bbox_to_anchor=(1.17, 0.71), frameon=False, title='SD m')
+leg_li = fig.legend(handles=build_legend_handles(col_li, li_site_popsize.columns), bbox_to_anchor=(1.19, 0.35), frameon=False, title=r'SWD Wm$^{-2}$')
+
+# Manually add the first legends back to the plot
+ax4.add_artist(leg_t)
+ax4.add_artist(leg_sd)
+
 plt.tight_layout()
+
+plt.savefig(os.path.join(RESULTS, 'fig2_env_sensitivity.pdf'))
 
 
 # %% trusted=true
-t_site.plot()
+cols = ['start_DOY', 'dur_d', 'P_max', 'sigmaG_N']
+
+# %% trusted=true
+df_T = pd.concat([t_start, t_dur, t_site_popsize.max(), t_sum], axis=1)
+df_T.columns = cols
+df_T
+
+# %% trusted=true
+df_sd = pd.concat([sd_start, sd_dur, sd_site_popsize.max(), sd_sum], axis=1)
+df_sd.columns = cols
+df_sd
+
+# %% trusted=true
+df_li = pd.concat([li_start, li_dur, li_site_popsize.max(), li_sum], axis=1)
+df_li.columns = cols
+df_li
 
 # %% [markdown]
 # ## Load QMC experiment info
@@ -628,8 +832,11 @@ qmc_expts.head()
 # ## Fig. 3: QMC analysis at Point sites
 
 # %% trusted=true scrolled=true
-regenerate = True
-years = (2022, 2022)
+# Extract time series of every single QMC experiment, exported to CSV for each Point site
+regenerate = False
+# To support the analysis in subsequent cells, run this cell twice, 
+# once for the warm year (2019) and once for the cold year (2022)
+years = (2019, 2019)
 
 # Filename formatting according to time range
 if years[0] == years[1]:
@@ -641,24 +848,31 @@ else:
 if regenerate:
     for ix, row in pts_ps.iterrows():
         print(ix)
-        store = []
+        store_pop = []
+        store_Gn = []
         for year in range(years[0], years[1]+1):
             print(year)
-            ensemble = get_qmc_ts(year, geom=row.geometry)
-            store.append(ensemble)
+            pop, Gn = get_qmc_ts(year, geom=row.geometry)
+            store_pop.append(pop)
+            store_Gn.append(Gn)
         
-        pd.concat(store, axis=0).to_csv(os.path.join(RESULTS,f'qmc_gris_median_ts_{ix}_{t}.csv'))
-
-# %% trusted=true
-sites
+        pd.concat(store_pop, axis=0).to_csv(os.path.join(RESULTS,f'qmc_ts_dailypop_{ix}_{t}.csv'))
+        pd.concat(store_Gn, axis=0).to_csv(os.path.join(RESULTS,f'qmc_ts_Gn_{ix}_{t}.csv'))
 
 # %% trusted=true scrolled=true
 # Now reload same reudced QMC outputs from disk
-sites_cold = {}
-sites_warm = {}
+sites_cold_pop = {}
+sites_warm_pop = {}
+
+sites_cold_Gn = {}
+sites_warm_Gn = {}
+
 for ix, row in pts_ps.iterrows():
-    sites_cold[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_gris_median_ts_{ix}_2022.csv'), index_col=0, parse_dates=True)
-    sites_warm[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_gris_median_ts_{ix}_2019.csv'), index_col=0, parse_dates=True)
+    sites_cold_pop[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_dailypop_{ix}_2022.csv'), index_col=0, parse_dates=True)
+    sites_warm_pop[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_dailypop_{ix}_2019.csv'), index_col=0, parse_dates=True)
+
+    sites_cold_Gn[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_Gn_{ix}_2022.csv'), index_col=0, parse_dates=True)
+    sites_warm_Gn[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_Gn_{ix}_2019.csv'), index_col=0, parse_dates=True)
 
 
 # %% trusted=true
@@ -666,10 +880,15 @@ for ix, row in pts_ps.iterrows():
 
 # First find end of active growth 
 # This requires gross daily production, so have to revisit the netcdfs. 
-# This is expensive so we want to do this as few times as possible.
+# This is expensive so we want to do this as few times as possible, hence the quantile-based approach
 
 def find_last_bloom_day_site(year, site_runs, geom, quantiles=[0.25, 0.5, 0.75]):
     """
+    Inputs:
+
+    - year
+    - site_runs : df of one column per QMC experiment, rows are time series, for this site i nquestion.
+    - geom : the
     Returns:
     (tuple of experimment IDs, tuple of LDOY for each requested quantile)
     """
@@ -699,8 +918,8 @@ expts_cold = {}
 ldoy_warm = {}
 ldoy_cold = {}
 for ix, row in pts_ps.iterrows():
-    expts_warm[ix], ldoy_warm[ix] = find_last_bloom_day_site(2019, sites_warm[ix], row.geometry)
-    expts_cold[ix], ldoy_cold[ix] = find_last_bloom_day_site(2022, sites_cold[ix], row.geometry)
+    expts_warm[ix], ldoy_warm[ix] = find_last_bloom_day_site(2019, sites_warm_pop[ix], row.geometry)
+    expts_cold[ix], ldoy_cold[ix] = find_last_bloom_day_site(2022, sites_cold_pop[ix], row.geometry)
     
 
 # Now calculate total biomass at each quantile during the active growth period.
@@ -711,9 +930,9 @@ q_lut = {0:0.25, 1:0.50, 2:0.75}
 # Iterate site-by-site, adding two rows per site: one for the warm year, one for the cold year
 for ix, row in pts_ps.iterrows():
     
-    med = sites_cold[ix][sites_cold[ix] > 179].loc[:doy_to_datetime(2022, ldoy_cold[ix][1]), expts_cold[ix][1]].sum()
-    q75 = sites_cold[ix][sites_cold[ix] > 179].loc[:doy_to_datetime(2022, ldoy_cold[ix][2]), expts_cold[ix][2]].sum() 
-    q25 = sites_cold[ix][sites_cold[ix] > 179].loc[:doy_to_datetime(2022, ldoy_cold[ix][0]), expts_cold[ix][0]].sum()
+    med = sites_cold_Gn[ix][sites_cold_pop[ix] > 179].loc[:doy_to_datetime(2022, ldoy_cold[ix][1]), expts_cold[ix][1]].sum()
+    q75 = sites_cold_Gn[ix][sites_cold_pop[ix] > 179].loc[:doy_to_datetime(2022, ldoy_cold[ix][2]), expts_cold[ix][2]].sum() 
+    q25 = sites_cold_Gn[ix][sites_cold_pop[ix] > 179].loc[:doy_to_datetime(2022, ldoy_cold[ix][0]), expts_cold[ix][0]].sum()
     iqr = q75 - q25
     store.append(dict(
         yr='2022',
@@ -724,9 +943,9 @@ for ix, row in pts_ps.iterrows():
         site=ix
     ))
 
-    med = sites_warm[ix][sites_warm[ix] > 179].loc[:doy_to_datetime(2019, ldoy_warm[ix][1]), expts_warm[ix][1]].sum()
-    q75 = sites_warm[ix][sites_warm[ix] > 179].loc[:doy_to_datetime(2019, ldoy_warm[ix][2]), expts_warm[ix][2]].sum() 
-    q25 = sites_warm[ix][sites_warm[ix] > 179].loc[:doy_to_datetime(2019, ldoy_warm[ix][0]), expts_warm[ix][0]].sum()
+    med = sites_warm_Gn[ix][sites_warm_pop[ix] > 179].loc[:doy_to_datetime(2019, ldoy_warm[ix][1]), expts_warm[ix][1]].sum()
+    q75 = sites_warm_Gn[ix][sites_warm_pop[ix] > 179].loc[:doy_to_datetime(2019, ldoy_warm[ix][2]), expts_warm[ix][2]].sum() 
+    q25 = sites_warm_Gn[ix][sites_warm_pop[ix] > 179].loc[:doy_to_datetime(2019, ldoy_warm[ix][0]), expts_warm[ix][0]].sum()
     iqr = q75 - q25
     store.append(dict(
         yr='2019',
@@ -737,31 +956,41 @@ for ix, row in pts_ps.iterrows():
         site=ix
     ))
 
-df = pd.DataFrame(store)    
+Gn_sums = pd.DataFrame(store)    
+# Convert from summed ng DW ml-1 to kg DW over grid
+for col in ['biomass', 'iqr', 'q75', 'q25']:
+    Gn_sums[col] = Gn_sums[col].apply(to_kgDWgrid)
 
 # %% trusted=true
 letgen = letters()
 
 fig = plt.figure(figsize=(7.5, 4))
 # nrows, ncols
-gs = fig.add_gridspec(2,3)
+gs = fig.add_gridspec(4,3)
 
-#fig, axes = plt.subplots(ncols=3, nrows=2)
 col_warm = sns.set_hls_values('tab:orange', l=0.6)
 col_cold = sns.set_hls_values('tab:blue', l=0.6)
-def _plot_site(ax, site_name):
-    
-    sites_warm[site_name].plot(legend=False, color=col_warm, alpha=0.05, ax=ax, linewidth=0.5)
-    sites_warm[site_name].quantile(0.5, axis=1).plot(color='tab:orange', linewidth=2, ax=ax)    
-    sites_warm[site_name].quantile(0.25, axis=1).plot(color='tab:orange', ax=ax)    
-    sites_warm[site_name].quantile(0.75, axis=1).plot(color='tab:orange', ax=ax)    
 
+## Plots of daily population size
+def _plot_site(ax, site_name):
+
+    ## Warm
+    # Plot all model runs
+    sites_warm_pop[site_name].plot(legend=False, color=col_warm, alpha=0.05, ax=ax, linewidth=0.5)
+    # Plot specific metrics
+    sites_warm_pop[site_name].quantile(0.5, axis=1).plot(color='tab:orange', linewidth=2, ax=ax)    
+    sites_warm_pop[site_name].quantile(0.25, axis=1).plot(color='tab:orange', ax=ax)    
+    sites_warm_pop[site_name].quantile(0.75, axis=1).plot(color='tab:orange', ax=ax)    
+
+    ## Cold
     # Take copy of cold site purely so that we can adjust time to match the warm year,
     # so that we can plot them on same x axis
     # n.b. this is a bit slow, would probably be better to reindex a different way...
-    ts = deepcopy(sites_cold[site_name])
+    ts = deepcopy(sites_cold_pop[site_name])
     ts.index = ts.index - dt.timedelta(days=365*3)
+    # Plot all model runs
     ts.plot(legend=False, color=col_cold, alpha=0.05, ax=ax, linewidth=0.5)
+    # Plot specific metrics
     ts.quantile(0.5, axis=1).plot(color='tab:blue', linewidth=2, ax=ax)    
     ts.quantile(0.25, axis=1).plot(color='tab:blue', ax=ax)    
     ts.quantile(0.75, axis=1).plot(color='tab:blue', ax=ax)    
@@ -772,27 +1001,27 @@ def _plot_site(ax, site_name):
     ax.xaxis.set_major_locator(m)
     ax.xaxis.set_major_formatter(dates.DateFormatter('%b'))
     ax.set_xlabel('')
-    ax.set_ylabel(f'Pop. size ({UNIT_DW})')
+    ax.set_ylabel(f'P ({UNIT_DW})')
     label_panel(ax, next(letgen))
     
     
-ax1 = fig.add_subplot(gs[0, 0])
+ax1 = fig.add_subplot(gs[0:2, 0])
 _plot_site(ax1, 'UPE')
-ax2 = fig.add_subplot(gs[1, 0])
+ax2 = fig.add_subplot(gs[2:4, 0])
 _plot_site(ax2, 'S6')
-ax3 = fig.add_subplot(gs[0, 1])
+ax3 = fig.add_subplot(gs[0:2, 1])
 _plot_site(ax3, 'Mittivak')
-ax4 = fig.add_subplot(gs[1, 1])
+ax4 = fig.add_subplot(gs[2:4, 1])
 _plot_site(ax4, 'South')
 
-
-# Now plot total biomass by site for cold and warm years as a bar plot
+## ------------
+## Total biomass by site for cold and warm years as a bar plot
 # (if we used full ensemble here then we could do this as a boxplot, but would need to calculate the active bloom duration for all experiments in the ensemble)
-ax5 = fig.add_subplot(gs[:, 2])
+ax5 = fig.add_subplot(gs[2:4, 2])
 
-df = df.rename({'yr':'Year'}, axis=1)
+Gn_sums = Gn_sums.rename({'yr':'Year'}, axis=1)
 g = sns.barplot(
-    data=df,
+    data=Gn_sums,
     x="site", y="biomass", hue="Year",
     ax=ax5
 )
@@ -804,24 +1033,36 @@ g = sns.barplot(
 
 # Add errorbars (IQR) for cold year
 xpos = 0
-for ix, row in df[df.Year == '2022'].iterrows():
+for ix, row in Gn_sums[Gn_sums.Year == '2022'].iterrows():
     ax5.plot([xpos-0.2,xpos-0.2], [row.q25, row.q75], color='k')
     xpos += 1
 
 # Add errorbars (IQR) for warm year
 xpos = 0
-for ix, row in df[df.Year == '2019'].iterrows():
+for ix, row in Gn_sums[Gn_sums.Year == '2019'].iterrows():
     ax5.plot([xpos+0.2,xpos+0.2], [row.q25, row.q75], color='k')
     xpos += 1
 
 label_panel(ax5, next(letgen))
-ax5.legend(loc='upper right')
-ax5.set_ylabel(f'Total biomass ({UNIT_DW})')
+ax5.legend(bbox_to_anchor=(1, 1.2), frameon=False) #loc='upper right',
+ax5.set_ylabel(UNIT_DW_TOT)
+ax5.set_xlabel('')
+
+
+# Locations map
+ax_map = fig.add_axes([0.65,0.48,0.3,0.53]) #fig.add_subplot(gs[0:2, 2])
+for axis in ['top','bottom','left','right']:
+    ax_map.spines[axis].set_linewidth(0)
+im = mpimg.imread(os.path.join(WORK_ROOT, 'sites_context_map.png'))
+ax_map.imshow(im,interpolation='none')
+ax_map.set_xticks([])
+ax_map.set_yticks([])
+ax_map.set_facecolor('none')
 
 sns.despine()
 plt.tight_layout()
 
-plt.savefig(os.path.join(RESULTS, 'fig3_site_ensembles.pdf'))
+plt.savefig(os.path.join(RESULTS, 'fig3_site_ensembles.pdf'), bbox_inches='tight')
 
 
 # %% [markdown]
@@ -862,7 +1103,7 @@ for year in data['year'].unique():
         for ix, row in meas_subset.iterrows():
             rr = r.cum_growth.sel(x=row.geometry.x, y=row.geometry.y, method='nearest').sel(TIME=row.date)
             outputs.append({'date':row.date, 'study':row.study, 'site':row.site, 'exptid':exp, 'biomass_dw':float(rr)})
-        
+
 
 # %% trusted=true scrolled=true
 pts_modelled = pd.DataFrame(outputs)
@@ -892,173 +1133,22 @@ m
 pts_modelled.to_csv(os.path.join(RESULTS, 'qmc_modelled_at_observed_points_all_expts.csv'))
 m.to_csv(os.path.join(RESULTS, 'qmc_modelled_quantiles_vs_observed.csv'))
 
-
-# %% trusted=true
-mm = m.groupby(['study', 'site', 'date']).mean()
-sns.scatterplot(data=mm, y='observed.cells.ml.dw', x='modelled.biomass.dw.q50')
-
-# %% trusted=true
-sns.scatterplot(data=m, x='observed.cells.ml.dw', y='modelled.biomass.dw.q50')
-
-# %% trusted=true
-m['modelled.biomass.dw.q50']
+# %% [markdown]
+# ## Ice sheet wide preparations
 
 # %% [markdown]
-# #### Defunct: Annual boxplots for each sector of sum or max
+# This needs to be done in two parts, both outside this notebook:
+#
+# 1. Run `calculate_qmc_run_summary_metrics.py`
+# 2. Run `calculate_qmc_ensemble_metrics.py`
 
 # %% trusted=true
-store = {}
-for ix, sector in basins.iterrows():
-    d = annual_g_sum.rio.clip([sector.geometry], all_touched=True, drop=True)
-    # Convert to a Pandas dataframe with columns (index=x,y,time), year, cum_growth
-    df = d.stack(xy=('x','y')).to_pandas()
-    forbox = df.T.stack().to_frame()
-    forbox.columns = ['cum_growth']
-    forbox['year'] = forbox.index.get_level_values(2).year
-    store[sector.SUBREGION1] = forbox
+# Set the path to the outputs provided by the second script.
+fn_annual_summary = os.path.join(WORK_ROOT, RESULTS, 'model_outputs_QMCE_{year}_summary_q{q}.nc')
 
-# %% trusted=true
-for sector in store:
-    fig, ax = plt.subplots()
-    sns.boxplot(ax=ax, data=store[sector], x='year', y='cum_growth', color='g')
-    plt.title(sector)
-    plt.ylim(0, 3e6)
-    
-    xticks, xlabels = plt.xticks()
-    xticks = np.arange(0, 25, 5)
-    xlabels = xticks + 2000
-    plt.xticks(xticks, xlabels)
-    plt.xlabel('')
-    plt.ylabel('Sum biomass (ng DW ml$^{-1}$)')
-    sns.despine()
-
-# %% trusted=true
-for year in range(2000, 2023):
-    #plt.hist(qmc[year].max(axis=0))
-    sns.kdeplot(qmc[year].max(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
-
-# %% trusted=true
-for year in range(2000, 2023):
-    #plt.hist(qmc[year].max(axis=0))
-    sns.kdeplot(qmc[year].sum(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
-
-# %% trusted=true
-sns.kdeplot(bmax_gris, fill=True, label='2012')
-sns.kdeplot(bmax00, fill=True, label='2000')
-plt.legend()
-
-# %% trusted=true scrolled=true
-qmc12_s6, bmax12_s6, sd12_s6, sd_sd12_s6 = analyse_qmc(2012, geom=pts_ps.loc['S6'].geometry, metrics=True)
-
-# %% trusted=true scrolled=true
-qmc12_s6.plot(legend=False, alpha=0.1, color='tab:blue')
-
-# %% trusted=true
-
-# %% trusted=true
-main_outputs = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_MAIN, '*.nc'))
-main_outputs['x'] = mar.x
-main_outputs['y'] = mar.y
-
-# %% trusted=true
-main_outputs
-
-# %% trusted=true
-# Find annual last productive day in each grid cell.
-store = []
-for year in range(YR_ST, YR_END+1):
-    d = main_outputs.sel(TIME=str(year))
-    doy = d.TIME.dt.dayofyear
-    d['TIME'] = doy
-    lpd = d.today_prod.cumsum(dim='TIME').idxmax(dim='TIME')
-    lpd.coords['TIME'] = pd.Timestamp(year, 1, 1)
-    lpd = lpd.expand_dims({'TIME':[pd.Timestamp(year, 1, 1)]})
-    store.append(lpd.compute())
-
-last_prod_doy = xr.concat(store, dim='TIME') 
-# Forward-fill the end DOY to cover the full year, each year
-# And we manually force this to continue to the end of 2022.
-last_prod_doy = last_prod_doy.reindex(TIME=pd.date_range(last_prod_doy['TIME'].isel(TIME=0).values, '2023-01-01', freq='1D'), method='ffill')
 
 # %% [markdown]
-# ### Locations time series
-
-# %% trusted=true
-# Extract time series of population size
-store = {}
-for ix, row in pts_ps.iterrows():
-    v = main_outputs.cum_growth.sel(x=row.geometry.x, y=row.geometry.y, method='nearest').to_pandas()
-    store[ix] = v
-ts = pd.DataFrame(store)
-
-# %% trusted=true
-ts
-
-# %% trusted=true
-totals.T
-
-# %% trusted=true
-pd.DataFrame(store_totals, columns=['site', 'biomass_sum'])
-
-# %% trusted=true
-pts_ps['color'].values
-
-# %% trusted=true
-#year = yr_recent_warmest
-year = yr_recent_coldest
-
-fig, axes = plt.subplots(figsize=(4,2.3), nrows=1, ncols=2, width_ratios=[0.75, 0.25])
-
-# Time series
-store_totals = []
-for site in ts.columns:
-    data = ts.loc[str(year)][site]
-    axes[0].plot(data.index, data, c=pts_ps.loc[site]['color'], label=site, linewidth=1.2)
-    doy_end = int(last_prod_doy.sel(x=pts_ps.loc[site].geometry.x, y=pts_ps.loc[site].geometry.y, method='nearest').sel(TIME=str(year)).values[0])
-    date_end = dt.datetime.strptime(f'{year}-{doy_end}', '%Y-%j')
-    axes[0].plot(date_end, data.loc[date_end], 'd', c=pts_ps.loc[site]['color'])
-    
-    store_totals.append(data.loc[:date_end].sum())
-
-m = dates.MonthLocator() 
-axes[0].xaxis.set_major_locator(m)
-axes[0].xaxis.set_major_formatter(dates.DateFormatter('1 %b'))
-
-axes[0].legend(frameon=False)
-axes[0].set_ylabel('Biomass (ng DW ml$^{-1}$)')
-axes[0].set_ylim(0,25000)
-axes[0].set_xlabel(year)
-
-# Totals bar chart    
-totals = pd.DataFrame([ts.columns, store_totals])
-totals = totals.T
-totals.columns = ['site', 'biomass_sum']
-totals.index = totals.site
-sns.barplot(x=totals.site, y=totals.biomass_sum, palette=pts_ps['color'])
-#totals.plot.bar(ax=axes[1], legend=False, color=pts_ps['color'].values)
-axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=90)
-axes[1].set_xlabel('')
-axes[1].set_ylabel('')
-axes[1].set_ylim(0, 2.5e6)
-
-sns.despine()
-plt.subplots_adjust(wspace=0.25)
-
-plt.savefig(os.path.join(RESULTS, f'fig_timeseries_{year}.pdf'), bbox_inches='tight')
-
-# %% trusted=true
-totals
-
-# %% [markdown]
-# ## Map small versus large bloom years
-
-# %% trusted=true
-# Calculate metrics
-valid_growth = main_outputs.cum_growth.where(main_outputs.TIME.dt.dayofyear <= last_prod_doy).where(main_outputs.cum_growth > START_POP).where(mar.MSK > 50)
-annual_g_sum = valid_growth.resample(TIME='1AS').sum(dim='TIME')
-annual_g_sum = annual_g_sum.where(annual_g_sum > 0).compute()
-annual_g_max = valid_growth.resample(TIME='1AS').max(dim='TIME').compute()
-
+# ## Fig. 5: Map small versus large bloom years
 
 # %% trusted=true
 ## To look at all years together, uncomment these lines and run cell
@@ -1080,17 +1170,27 @@ def plot_contours(ax):
 
 
 # %% trusted=true
-fig, ax = plt.subplots()
-plot_contours(ax)
+d19
 
 # %% trusted=true
+d19 = xr.open_dataset(fn_annual_summary.format(year=2019, q=50))
+d22 = xr.open_dataset(fn_annual_summary.format(year=2022, q=50))
+
 crs = ccrs.NorthPolarStereo(central_longitude=-45., true_scale_latitude=70.)
 fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4*1.2,6*1.2), subplot_kw={'projection':crs})
 
 cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
+letgen = letters()
 
 def plot_base(ax, contours=True):
     jgg_gdf.plot(ax=ax, color='#CDB380', edgecolor='none', alpha=1, zorder=1)
+    basins.plot(ax=ax, color='None', edgecolor='tab:cyan', linewidth=0.5, alpha=0.5, zorder=3)
+    for ix, basin in basins.iterrows():
+        # if basin.SUBREGION1 in ['SE', 'CE']:
+        #     continue
+        x, y = basin.geometry.centroid.xy
+        ax.text(x[0], y[0], basin.SUBREGION1, ha='center', va='center', fontsize=7, zorder=30, color='tab:cyan', alpha=0.5)
+        
     gris_outline.plot(ax=ax, color='whitesmoke', edgecolor='none', alpha=1, zorder=2)
     if contours:
         plot_contours(ax)
@@ -1102,13 +1202,14 @@ plt.subplots_adjust(wspace=0, hspace=0)
 # Sums
 norm_sum = colors.LogNorm(vmin=179, vmax=2.5e6)
 kws_sum = dict(norm=norm_sum, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
-annual_g_sum.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws_sum)
+#annual_g_sum.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws_sum)
+d19.annual_net_growth_sum.rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws_sum)
 axes[0,0].set_title('2019')
-label_panel(axes[0,0], 'a')
+label_panel(axes[0,0], next(letgen))
 
-annual_g_sum.sel(TIME='2022').rio.clip(basins.geometry.values).plot(ax=axes[0,1], **kws_sum)
+d22.annual_net_growth_sum.rio.clip(basins.geometry.values).plot(ax=axes[0,1], **kws_sum)
 axes[0,1].set_title('2022')
-label_panel(axes[0,1], 'b')
+label_panel(axes[0,1], next(letgen))
 
 from matplotlib import cm
 cbar_sum = fig.add_axes((0.9, 0.55, 0.04, 0.3))
@@ -1119,13 +1220,13 @@ plt.colorbar(mappable=cm.ScalarMappable(norm=norm_sum, cmap=cmap), cax=cbar_sum,
 # Maxes
 norm_max = colors.Normalize(vmin=0, vmax=30000)
 kws_max = dict(norm=norm_max, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
-annual_g_max.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[1,0], **kws_max)
+d19.annual_pop_max.rio.clip(basins.geometry.values).plot(ax=axes[1,0], **kws_sum)
 axes[1,0].set_title('')
-label_panel(axes[1,0], 'c')
+label_panel(axes[1,0], next(letgen))
 
-annual_g_max.sel(TIME='2022').rio.clip(basins.geometry.values).plot(ax=axes[1,1], **kws_max)
+d22.annual_pop_max.rio.clip(basins.geometry.values).plot(ax=axes[1,1], **kws_sum)
 axes[1,1].set_title('')
-label_panel(axes[1,1], 'd')
+label_panel(axes[1,1], next(letgen))
 
 cbar_max = fig.add_axes((0.9, 0.15, 0.04, 0.3))
 cbar_max_kws={'label':'Max. biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
@@ -1135,12 +1236,12 @@ plt.colorbar(mappable=cm.ScalarMappable(norm=norm_max, cmap=cmap), cax=cbar_max,
 for ax in axes.flatten():
     plot_base(ax)
 
-plt.savefig(os.path.join(RESULTS, 'fig_map_sum_max_2019_2022.pdf'), dpi=300, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, 'fig_map_sum_max_QMC_2019_2022.pdf'), dpi=300, bbox_inches='tight')
 
 ## To do -add scale bar
 
 # %% [markdown]
-# ### Supplementary Figure: annual bloom extent
+# ### Supplementary Figure: annual bloom extents, year by year
 #
 # This Figure takes plotting styles directly from previous section
 
@@ -1173,49 +1274,48 @@ plt.savefig(os.path.join(RESULTS, 'fig_suppl_annual_bloom_max.pdf'), dpi=300, bb
 
 
 # %% [markdown]
-# ## Sector-by-sector analysis
+# ## Fig. 6: Time-series / Sector-by-sector analysis
 #
 # Need to normalise by area. The max approach doesn't do this, because in areas like the SW with bigger blooms, the boxplots of max get 'depressed' - even though the sample size is much bigger.
 
 # %% trusted=true
+# Melt time series
+mar_melt = xr.open_mfdataset(INPUTS_PATH, preprocess=lambda ds: ds.ME)
 
 # %% trusted=true
-basins
+mar_melt
+
+# %% trusted=true
+qmc_med = open_model_run(os.path.join(RESULTS, fn_annual_summary.format(year='*', q=50)))
+qmc_q25 = open_model_run(os.path.join(RESULTS, fn_annual_summary.format(year='*', q=25))).rio.write_crs(CRS)
+qmc_q75 = open_model_run(os.path.join(RESULTS, fn_annual_summary.format(year='*', q=75))).rio.write_crs(CRS)
 
 # %% trusted=true
 # Calculate sums of bloom size per each elevation class in each sector of the ice sheet.
 store = {}
+store_q75 = {}
+store_q25 = {}
 for ix, sector in basins.iterrows():
-    d = annual_g_sum.rio.clip([sector.geometry], all_touched=True, drop=True)
+    d = qmc_med.annual_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True)
     sh = mar.SH.rio.clip([sector.geometry], all_touched=True, drop=True)
     sector_sum_bio_by_elev = d.groupby_bins(sh, bins=np.arange(0,2200, 400), labels=np.arange(0,2000, 400)).sum().to_pandas()
     store[sector.SUBREGION1] = sector_sum_bio_by_elev
-
-# %% trusted=true
-# GrIS context map
-crs = ccrs.NorthPolarStereo(central_longitude=-45., true_scale_latitude=70.)
-ax_gris = plt.subplot(111, projection=crs)
-jgg_gdf.plot(ax=ax_gris, color='#CDB380', edgecolor='none', alpha=1, zorder=1)
-
-gris_outline.plot(ax=ax_gris, color='whitesmoke', edgecolor='none', alpha=1, zorder=2)
-cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
-norm = colors.LogNorm(vmin=179, vmax=2.5e6)
-kws = dict(norm=norm, cmap=cmap, rasterized=True)
-annual_g_sum.mean(dim='TIME').rio.clip(basins.geometry.values).plot(ax=ax_gris, zorder=10, **kws)
-
-basins.plot(ax=ax_gris, color='None', edgecolor='Grey', linewidth=0.5, zorder=20)
-ax_gris.axis('off')
-for ix, basin in basins.iterrows():
-    if basin.SUBREGION1 in ['SE', 'CE']:
-        continue
-    x, y = basin.geometry.centroid.xy
-    ax_gris.text(x[0], y[0], basin.SUBREGION1, ha='center', va='center', fontsize=9, zorder=30)
-plt.title('')
-plt.savefig(os.path.join(RESULTS, 'fig_sectors_average_sum_map.pdf'), bbox_inches='tight')
+    store_q75[sector.SUBREGION1] = qmc_q75.annual_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True).sum(dim=('x','y')) 
+    store_q25[sector.SUBREGION1] = qmc_q25.annual_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True).sum(dim=('x','y'))
 
 # %% trusted=true
 fig, axes = plt.subplots(figsize=(5,6), ncols=2, nrows=4)
 axes = axes.flatten()
+
+letgen = letters()
+
+ax = axes[0]
+ax.fill_between(qmc_med['TIME'], qmc_q25.annual_growth_sum.sum(dim=('x','y')), qmc_q75.annual_growth_sum.sum(dim=('x','y')), color='grey', alpha=0.5, edgecolor='none')
+ax.plot(qmc_med['TIME'], qmc_med.annual_growth_sum.sum(dim=('x','y')), color='k')
+ax.xaxis.set_major_locator(dates.YearLocator(5))
+label_panel(ax, next(letgen))
+ax.annotate('All sectors', xy=(0.04, 0.78), xycoords='axes fraction', style='italic',
+           horizontalalignment='left', verticalalignment='top', fontsize=8)
 
 n = 1
 for s in ['NO','NW','NE','CW','CE','SW','SE']:
@@ -1223,15 +1323,44 @@ for s in ['NO','NW','NE','CW','CE','SW','SE']:
     ax = axes[n]
     #sns.cubehelix_palette(n_colors=5, start=.7, rot=-.75, reverse=True)
     ax.stackplot(r.index, r.T, labels=r.columns, colors=sns.color_palette('flare_r', n_colors=5), edgecolor='none', linewidth=0)
+    ax.vlines(r.index, store_q25[s].T, store_q75[s].T, color='k', linewidth=0.5, alpha=0.8)
     ax.set_ylim(0, 5e8)
-    ax.set_title(s, y=0.9)
+    #ax.set_title(s, y=0.77, loc='center')
     ax.xaxis.set_major_locator(dates.YearLocator(5))
+    label_panel(ax, next(letgen))
+    ax.annotate(s, xy=(0.04, 0.75), xycoords='axes fraction', style='italic',
+           horizontalalignment='left', verticalalignment='top')
+    
     n += 1
-ax.legend(loc=(1,0.1), frameon=False)
+ax.legend(loc=(1,0.1), frameon=False, title='Elev. m', title_fontsize=SMALL_SIZE)
 sns.despine()
 plt.subplots_adjust(hspace=0.5)
 
-plt.savefig(os.path.join(RESULTS, 'fig_sectors_annual_sum.pdf'), bbox_inches='tight')
+fig.text(0.05, 0.5, f'Total biomass ({UNIT_DW})', va='center', rotation=90)
+
+plt.savefig(os.path.join(RESULTS, 'fig_sectors_annual_sum_qmc_med.pdf'), bbox_inches='tight')
+
+# %% trusted=true
+# # GrIS context map
+# crs = ccrs.NorthPolarStereo(central_longitude=-45., true_scale_latitude=70.)
+# ax_gris = plt.subplot(111, projection=crs)
+# jgg_gdf.plot(ax=ax_gris, color='#CDB380', edgecolor='none', alpha=1, zorder=1)
+
+# gris_outline.plot(ax=ax_gris, color='whitesmoke', edgecolor='none', alpha=1, zorder=2)
+# cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
+# norm = colors.LogNorm(vmin=179, vmax=2.5e6)
+# kws = dict(norm=norm, cmap=cmap, rasterized=True)
+# annual_g_sum.mean(dim='TIME').rio.clip(basins.geometry.values).plot(ax=ax_gris, zorder=10, **kws)
+
+# basins.plot(ax=ax_gris, color='None', edgecolor='Grey', linewidth=0.5, zorder=20)
+# ax_gris.axis('off')
+# for ix, basin in basins.iterrows():
+#     if basin.SUBREGION1 in ['SE', 'CE']:
+#         continue
+#     x, y = basin.geometry.centroid.xy
+#     ax_gris.text(x[0], y[0], basin.SUBREGION1, ha='center', va='center', fontsize=9, zorder=30)
+# plt.title('')
+# plt.savefig(os.path.join(RESULTS, 'fig_sectors_average_sum_map.pdf'), bbox_inches='tight')
 
 # %% [markdown]
 # ## Extent of blooms / % coverage of ice sheet by blooms and trend analysis
@@ -1286,6 +1415,7 @@ annual_g_sum_griswide.max()
 # %% trusted=true
 # Annual total C ...
 # Need to mask by last productive day?
+# And need to first convert to cells ml, from ng DW ml???
 carbon = to_carbon(annual_g_sum)
 total_carbon = carbon.sum(dim=('x','y')).compute()
 
@@ -1692,3 +1822,123 @@ for sector in store:
     sns.despine()
 
 # %% trusted=true
+
+# %% [markdown]
+# ### Locations time series
+
+# %% trusted=true
+# Extract time series of population size
+store = {}
+for ix, row in pts_ps.iterrows():
+    v = main_outputs.cum_growth.sel(x=row.geometry.x, y=row.geometry.y, method='nearest').to_pandas()
+    store[ix] = v
+ts = pd.DataFrame(store)
+
+# %% trusted=true
+ts
+
+# %% trusted=true
+totals.T
+
+# %% trusted=true
+pd.DataFrame(store_totals, columns=['site', 'biomass_sum'])
+
+# %% trusted=true
+pts_ps['color'].values
+
+# %% trusted=true
+#year = yr_recent_warmest
+year = yr_recent_coldest
+
+fig, axes = plt.subplots(figsize=(4,2.3), nrows=1, ncols=2, width_ratios=[0.75, 0.25])
+
+# Time series
+store_totals = []
+for site in ts.columns:
+    data = ts.loc[str(year)][site]
+    axes[0].plot(data.index, data, c=pts_ps.loc[site]['color'], label=site, linewidth=1.2)
+    doy_end = int(last_prod_doy.sel(x=pts_ps.loc[site].geometry.x, y=pts_ps.loc[site].geometry.y, method='nearest').sel(TIME=str(year)).values[0])
+    date_end = dt.datetime.strptime(f'{year}-{doy_end}', '%Y-%j')
+    axes[0].plot(date_end, data.loc[date_end], 'd', c=pts_ps.loc[site]['color'])
+    
+    store_totals.append(data.loc[:date_end].sum())
+
+m = dates.MonthLocator() 
+axes[0].xaxis.set_major_locator(m)
+axes[0].xaxis.set_major_formatter(dates.DateFormatter('1 %b'))
+
+axes[0].legend(frameon=False)
+axes[0].set_ylabel('Biomass (ng DW ml$^{-1}$)')
+axes[0].set_ylim(0,25000)
+axes[0].set_xlabel(year)
+
+# Totals bar chart    
+totals = pd.DataFrame([ts.columns, store_totals])
+totals = totals.T
+totals.columns = ['site', 'biomass_sum']
+totals.index = totals.site
+sns.barplot(x=totals.site, y=totals.biomass_sum, palette=pts_ps['color'])
+#totals.plot.bar(ax=axes[1], legend=False, color=pts_ps['color'].values)
+axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=90)
+axes[1].set_xlabel('')
+axes[1].set_ylabel('')
+axes[1].set_ylim(0, 2.5e6)
+
+sns.despine()
+plt.subplots_adjust(wspace=0.25)
+
+plt.savefig(os.path.join(RESULTS, f'fig_timeseries_{year}.pdf'), bbox_inches='tight')
+
+# %% trusted=true
+totals
+
+# %% trusted=true
+
+# %% [markdown]
+# #### Defunct: Annual boxplots for each sector of sum or max
+
+# %% trusted=true
+store = {}
+for ix, sector in basins.iterrows():
+    d = annual_g_sum.rio.clip([sector.geometry], all_touched=True, drop=True)
+    # Convert to a Pandas dataframe with columns (index=x,y,time), year, cum_growth
+    df = d.stack(xy=('x','y')).to_pandas()
+    forbox = df.T.stack().to_frame()
+    forbox.columns = ['cum_growth']
+    forbox['year'] = forbox.index.get_level_values(2).year
+    store[sector.SUBREGION1] = forbox
+
+# %% trusted=true
+for sector in store:
+    fig, ax = plt.subplots()
+    sns.boxplot(ax=ax, data=store[sector], x='year', y='cum_growth', color='g')
+    plt.title(sector)
+    plt.ylim(0, 3e6)
+    
+    xticks, xlabels = plt.xticks()
+    xticks = np.arange(0, 25, 5)
+    xlabels = xticks + 2000
+    plt.xticks(xticks, xlabels)
+    plt.xlabel('')
+    plt.ylabel('Sum biomass (ng DW ml$^{-1}$)')
+    sns.despine()
+
+# %% trusted=true
+for year in range(2000, 2023):
+    #plt.hist(qmc[year].max(axis=0))
+    sns.kdeplot(qmc[year].max(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
+
+# %% trusted=true
+for year in range(2000, 2023):
+    #plt.hist(qmc[year].max(axis=0))
+    sns.kdeplot(qmc[year].sum(axis=0), label=year, fill=True, color='tab:blue', alpha=0.1)
+
+# %% trusted=true
+sns.kdeplot(bmax_gris, fill=True, label='2012')
+sns.kdeplot(bmax00, fill=True, label='2000')
+plt.legend()
+
+# %% trusted=true
+main_outputs = xr.open_mfdataset(os.path.join(MODEL_OUTPUTS_MAIN, '*.nc'))
+main_outputs['x'] = mar.x
+main_outputs['y'] = mar.y
