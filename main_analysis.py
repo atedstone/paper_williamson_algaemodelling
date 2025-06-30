@@ -19,13 +19,6 @@
 # # Williamson & Tedstone GrIS Algal Growth: Model Analysis
 #
 # This Notebook analyses outputs from the Python implementation of the algal growth model found in `algal_growth_model.py`. It produces the figures for the manuscript.
-#
-# Outputs of Python model:
-# - `daily_prod_hrs`
-# - `cum_growth`
-# - `today_prod`
-#
-# AT, Jan/Feb 2024
 
 # %% trusted=true
 # Main libraries
@@ -48,15 +41,12 @@ import matplotlib.colors as colors
 from matplotlib import dates
 from matplotlib import rcParams
 import matplotlib.image as mpimg
-
+import string
 import cartopy.crs as ccrs
 import seaborn as sns
 
 sns.set_context('paper')
 rcParams['font.family'] = 'Arial'
-rcParams['font.size'] = 7
-
-
 SMALL_SIZE = 8
 MEDIUM_SIZE = 8
 BIGGER_SIZE = 8
@@ -363,17 +353,16 @@ def to_carbon(x, grid_km=10):
 # %% trusted=true
 UNIT_DW = r'ng DW ml$^{-1}$'
 UNIT_WW = r'cells ml$^{-1}$'
-#UNIT_DW_TOT =  #r'Tot. $G_N$ (kg DW)'
 
 LABEL_P = '$P$ (%s)' %UNIT_DW
 LABEL_PMAX = '$P_{MAX}$ (%s)' %UNIT_DW
 LABEL_TOT_GN_PX = r'$\Sigma G_N$ (kg DW in 10$^2$ km)'
+LABEL_TOT_GN_T = r'$\Sigma G_N$ (t DW)'
 
 def label_panel(ax, letter, xy=(0.04,0.93)):
     ax.annotate(letter.upper(), fontweight='bold', xy=xy, xycoords='axes fraction',
            horizontalalignment='left', verticalalignment='top', fontsize=8)
 
-import string
 def letters(start=0, letters=list(string.ascii_lowercase)):
     """ Return letters of alphabet, in order, 1 by 1.
     
@@ -398,8 +387,6 @@ def letters(start=0, letters=list(string.ascii_lowercase)):
 
 # %% [markdown]
 # ## Load GIS data
-
-# %% trusted=true
 
 # %% trusted=true
 gris_outline = gpd.read_file(OUTLINE_FILE)
@@ -525,8 +512,7 @@ ploss_start = bloom_start(ploss_site_pop)
 ibio_sum = to_kgDWgrid(active_bloom_sum(ibio_site_Gn, ibio_start, ibio_site_end))
 ploss_sum = to_kgDWgrid(active_bloom_sum(ploss_site_Gn, ploss_start, ploss_site_end))
 
-
-
+# %% trusted=true
 ## Start plotting
 letgen = letters()
 fig = plt.figure(figsize=(6,4))
@@ -544,14 +530,6 @@ sns.lineplot(
     legend=False
 )
 ax_ibio_pop.set_yscale('log')
-#handles, labels = ax_ibio_pop.get_legend_handles_labels()
-# ax_ibio_pop.legend(
-#     handles[::-1], labels[::-1],     
-#     loc=(1,0.4), 
-#     frameon=False, 
-#     title='Start pop.',
-#     handlelength=1
-# )
 label_panel(ax_ibio_pop, next(letgen))
 ax_ibio_pop.set_ylabel(LABEL_P)
 
@@ -590,21 +568,7 @@ sns.lineplot(
     legend=False
 )
 ax_ploss_pop.set_yscale('log')
-# ploss_site_pop.plot(
-#     ax=ax_ploss_pop,
-#     legend=False,
-#     colormap=sns.color_palette('crest', as_cmap=True),
-#     logy=True
-# )
 ax_ploss_pop.set_ylabel(LABEL_P)
-# handles, labels = ax_ploss_pop.get_legend_handles_labels()
-# ax_ploss_pop.legend(
-#     handles, labels,     
-#     loc=(1,0.1), 
-#     frameon=False, 
-#     title='Loss %',
-#     handlelength=1
-# )
 label_panel(ax_ploss_pop, next(letgen))
 
 # Add text labels to each line
@@ -615,7 +579,6 @@ for p in ploss_site_pop.columns:
     if p == '10%':
         ydelta = 150
         xloc = dt.datetime(2016,9,29)
-    
     if p == '15%':
         xloc = dt.datetime(2016,9,12)
         ydelta = 150
@@ -629,7 +592,6 @@ for p in ploss_site_pop.columns:
 
 # ------------
 ax_ploss_Gn = fig.add_subplot(gs[1, 2])
-#sns.barplot(data=ploss_sum, ax=ax_ploss_Gn)
 ax_ploss_Gn.bar(np.arange(0, len(ploss_sum)),ploss_sum, color=cmap_ploss)
 ax_ploss_Gn.set_xticks(np.arange(0, len(ploss_sum)), [int(v[:-1]) for v in ploss_sum.index])
 ax_ploss_Gn.set_ylabel(LABEL_TOT_GN_PX)
@@ -643,21 +605,15 @@ for ax in [ax_ibio_pop, ax_ploss_pop]:
     ax.set_xlabel('')
 
 plt.tight_layout()
-#plt.subplots_adjust(wspace=0.7)
 sns.despine()
 
-plt.savefig(os.path.join(RESULTS, 'fig_phenological.pdf'), bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, 'fig1_phenological.pdf'), bbox_inches='tight')
 
-# %% trusted=true
-# ax_ibio_Gn.text?
-
-# %% trusted=true
-
-# %% trusted=true
-sns.color_palette('flare', n_colors=len(ibio_sum), as_cmap=True)
-
-# %% trusted=true
-# sns.color_palette?
+with pd.ExcelWriter(os.path.join(RESULTS, 'fig1.xlsx')) as w:
+    ibio_site_pop.to_excel(w, sheet_name='A_ngDWml')
+    ibio_sum.to_excel(w, sheet_name='B_kgDW_in_10sqkm')
+    ploss_site_pop.to_excel(w, sheet_name='C_ngDWml')
+    ploss_sum.to_excel(w, sheet_name='D_kgDW_in_10sqkm')
 
 # %% [markdown]
 # ### Fig. 2: Sensitivity to environmental parameters
@@ -669,7 +625,6 @@ regenerate = False
 fn_sd = os.path.join(RESULTS, 'sens_analysis_s6_snowdepth_{param}.csv')
 fn_li = os.path.join(RESULTS, 'sens_analysis_s6_swd_{param}.csv')
 fn_t = os.path.join(RESULTS, 'sens_analysis_s6_temperature_{param}.csv')
-
 
 if regenerate:
 
@@ -775,10 +730,8 @@ label_panel(ax4, next(letgen), xy=(0.09,0.93))
 
 sns.despine()
 
-
-
+# Special legend building for the colour coded markers
 import matplotlib.patches as mpatches
-
 def build_legend_handles(colors, labels):
     handles = []
     # handles is a list, so append manual patch
@@ -801,31 +754,22 @@ plt.savefig(os.path.join(RESULTS, 'fig2_env_sensitivity.pdf'))
 
 
 # %% trusted=true
-cols = ['start_DOY', 'dur_d', 'P_max', 'sigmaG_N']
+# Export to file
+cols = ['start_DOY', 'dur_d', 'P_max_ngDWml', 'sigmaGn_kgDW_in_10sqkm']
 
-# %% trusted=true
 df_T = pd.concat([t_start, t_dur, t_site_popsize.max(), t_sum], axis=1)
 df_T.columns = cols
-df_T
 
-# %% trusted=true
 df_sd = pd.concat([sd_start, sd_dur, sd_site_popsize.max(), sd_sum], axis=1)
 df_sd.columns = cols
-df_sd
 
-# %% trusted=true
 df_li = pd.concat([li_start, li_dur, li_site_popsize.max(), li_sum], axis=1)
 df_li.columns = cols
-df_li
 
-# %% [markdown]
-# ## Load QMC experiment info
-
-# %% trusted=true
-qmc_expts = pd.read_csv(EXPTS_DESIGN_FN, index_col=0)
-
-# %% trusted=true
-qmc_expts.head()
+with pd.ExcelWriter(os.path.join(RESULTS, 'fig2.xlsx')) as w:
+    df_T.to_excel(w, sheet_name='temperature')
+    df_sd.to_excel(w, sheet_name='snow_depth')
+    df_li.to_excel(w, sheet_name='shortwave_down')
 
 # %% [markdown]
 # ---
@@ -859,18 +803,16 @@ if regenerate:
         pd.concat(store_pop, axis=0).to_csv(os.path.join(RESULTS,f'qmc_ts_dailypop_{ix}_{t}.csv'))
         pd.concat(store_Gn, axis=0).to_csv(os.path.join(RESULTS,f'qmc_ts_Gn_{ix}_{t}.csv'))
 
-# %% trusted=true scrolled=true
-# Now reload same reudced QMC outputs from disk
+
+# Reload reduced QMC outputs from disk
 sites_cold_pop = {}
 sites_warm_pop = {}
-
 sites_cold_Gn = {}
 sites_warm_Gn = {}
 
 for ix, row in pts_ps.iterrows():
     sites_cold_pop[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_dailypop_{ix}_2022.csv'), index_col=0, parse_dates=True)
     sites_warm_pop[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_dailypop_{ix}_2019.csv'), index_col=0, parse_dates=True)
-
     sites_cold_Gn[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_Gn_{ix}_2022.csv'), index_col=0, parse_dates=True)
     sites_warm_Gn[ix] = pd.read_csv(os.path.join(RESULTS,f'qmc_ts_Gn_{ix}_2019.csv'), index_col=0, parse_dates=True)
 
@@ -1065,6 +1007,90 @@ plt.tight_layout()
 plt.savefig(os.path.join(RESULTS, 'fig3_site_ensembles.pdf'), bbox_inches='tight')
 
 
+# %% trusted=true
+with pd.ExcelWriter(os.path.join(RESULTS, 'fig3.xlsx')) as w:
+    sites_warm_pop['UPE'].to_excel(w, sheet_name='A_UPE_2019_ngDWml')
+    sites_cold_pop['UPE'].to_excel(w, sheet_name='A_UPE_2022_ngDWml')
+
+    sites_warm_pop['S6'].to_excel(w, sheet_name='B_S6_2019_ngDWml')
+    sites_cold_pop['S6'].to_excel(w, sheet_name='B_S6_2022_ngDWml')
+    
+    sites_warm_pop['Mittivak'].to_excel(w, sheet_name='C_MIT_2019_ngDWml')
+    sites_cold_pop['UPE'].to_excel(w, sheet_name='C_MIT_2022_ngDWml')
+
+    sites_warm_pop['South'].to_excel(w, sheet_name='D_SOUTH_2019_ngDWml')
+    sites_cold_pop['South'].to_excel(w, sheet_name='D_SOUTH_2022_ngDWml')
+
+    Gn_sums.to_excel(w, sheet_name='E_kgDW_in_10sqkm')
+
+# %% [markdown]
+# ## Load QMC experiment info
+
+# %% trusted=true
+qmc_expts = pd.read_csv(EXPTS_DESIGN_FN, index_col=0)
+
+# %% trusted=true
+qmc_expts.head()
+
+# %% trusted=true
+# Look at the underlying distrubiton of values for the median of each site
+plt.plot(qmc_expts.T_celsius, sites_warm_Gn['S6'].sum(), 'o', alpha=0.2)
+
+# %% trusted=true
+plt.plot(qmc_expts.snow_depth_metres, sites_warm_Gn['S6'].sum(), 'o', alpha=0.2)
+
+# %% trusted=true
+plt.plot(qmc_expts.ploss, sites_warm_Gn['S6'].sum(), 'o', alpha=0.2)
+
+# %% trusted=true
+plt.plot(qmc_expts.SWd_wm2, sites_warm_Gn['S6'].sum(), 'o', alpha=0.2)
+
+# %% trusted=true
+plt.plot(qmc_expts.ploss, sites_warm_pop['S6'].max(), 'o', alpha=0.2)
+
+# %% trusted=true
+plt.plot(qmc_expts.T_celsius, sites_warm_Gn['S6'].sum(), 'o', alpha=0.2)
+
+# %% trusted=true
+Gn_sums
+
+# %% trusted=true
+Gn_sums[(Gn_sums.yr == '2019' ) & (Gn_sums.site == 'S6')]
+
+# %% trusted=true
+fig, axes = plt.subplots(nrows=4, ncols=2, figsize=(5,6))
+#xes = axes.flatten()
+
+stats = Gn_sums[(Gn_sums.yr == '2019' ) & (Gn_sums.site == 'S6')].squeeze()
+
+n = 0
+for p in qmc_expts.columns:
+    ax = axes[n, 0]
+    m = to_kgDWgrid(sites_warm_Gn['S6'].sum())
+    m.index = pd.to_numeric(m.index)
+    ax.plot(qmc_expts[p], m, 'o', alpha=0.2)
+    print(np.round(qmc_expts[p].corr(m, method='spearman'), 2))
+    ax.axhline(stats.biomass, color='k')
+    ax.axhline(stats.q25, color='k', linestyle=':')
+    ax.axhline(stats.q75, color='k', linestyle=':')
+    ax.set_xlabel(p)
+    if n == 1:
+        ax.set_ylabel(r'$\Sigma G_N$ kg DW')
+    n += 1
+
+n = 0
+for p in qmc_expts.columns:
+    ax = axes[n, 1]
+    ax.plot(qmc_expts[p], sites_warm_pop['S6'].sum(), 'o', alpha=0.2)
+    ax.set_xlabel(p)
+    if n == 1:
+        ax.set_ylabel(r'$P_{MAX}$ ng DW ml-1')
+    n += 1  
+
+fig.suptitle('QMC ensemble S6 2019 (Warm), n=512')
+plt.tight_layout()
+sns.despine()
+
 # %% [markdown]
 # ## Fig. 4: Measured-modelled comparison
 
@@ -1087,9 +1113,6 @@ data = data.drop(columns=['observed.cells.ml', 'modelled.biomass.dw', 'observed.
 
 # Reset the index after the groupby operation produced a MultiIndex.
 data = data.reset_index()
-
-# %% trusted=true
-data
 
 # %% trusted=true
 outputs = []
@@ -1146,7 +1169,6 @@ m.to_csv(os.path.join(RESULTS, 'qmc_modelled_quantiles_vs_observed.csv'))
 # Set the path to the outputs provided by the second script.
 fn_annual_summary = os.path.join(WORK_ROOT, RESULTS, 'model_outputs_QMCE_{year}_summary_q{q}.nc')
 
-
 # %% [markdown]
 # ## Fig. 5: Map small versus large bloom years
 
@@ -1156,6 +1178,18 @@ fn_annual_summary = os.path.join(WORK_ROOT, RESULTS, 'model_outputs_QMCE_{year}_
 # annual_g_sum.plot(col='TIME', col_wrap=4, norm=norm)
 
 # %% trusted=true
+
+# %% trusted=true
+d19 = xr.open_dataset(fn_annual_summary.format(year=2019, q=50))
+d22 = xr.open_dataset(fn_annual_summary.format(year=2022, q=50))
+
+# %% trusted=true
+crs = ccrs.NorthPolarStereo(central_longitude=-45., true_scale_latitude=70.)
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4*1.2,6*1.2), subplot_kw={'projection':crs})
+
+cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
+letgen = letters()
+
 def plot_contours(ax):
     dem = gu.Raster(DEM_FILE)
     x,y = dem.coords()
@@ -1167,24 +1201,9 @@ def plot_contours(ax):
     ax.clabel(CS, CS.levels, inline=True, fontsize=6,
              manual=[(-150000, -1.25e6), (100000, -2.2e6), (200000, -2.0e6)])
 
-
-
-# %% trusted=true
-d19
-
-# %% trusted=true
-d19 = xr.open_dataset(fn_annual_summary.format(year=2019, q=50))
-d22 = xr.open_dataset(fn_annual_summary.format(year=2022, q=50))
-
-crs = ccrs.NorthPolarStereo(central_longitude=-45., true_scale_latitude=70.)
-fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(4*1.2,6*1.2), subplot_kw={'projection':crs})
-
-cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
-letgen = letters()
-
-def plot_base(ax, contours=True):
+def plot_base(ax, contours=True, grid_labels=False):
     jgg_gdf.plot(ax=ax, color='#CDB380', edgecolor='none', alpha=1, zorder=1)
-    basins.plot(ax=ax, color='None', edgecolor='tab:cyan', linewidth=0.5, alpha=0.5, zorder=3)
+    basins.plot(ax=ax, color='None', edgecolor='tab:cyan', linewidth=0.5, alpha=0.5, zorder=20)
     for ix, basin in basins.iterrows():
         # if basin.SUBREGION1 in ['SE', 'CE']:
         #     continue
@@ -1196,30 +1215,41 @@ def plot_base(ax, contours=True):
         plot_contours(ax)
     #surf_contours.plot(ax=ax, edgecolor='#c2c2c2', linewidth=0.7, zorder=150, alpha=0.5)
     ax.axis('off')
+
+    gl = ax.gridlines(draw_labels=grid_labels, 
+                 xlocs=[-55, -30], 
+                 ylocs=[65, 75], 
+                 x_inline=False, 
+                 y_inline=False, 
+                 ylim=(60, 85),
+                 zorder=120, 
+                xlabel_style={'zorder':200})
+    return gl
+
     
 plt.subplots_adjust(wspace=0, hspace=0)
 
 # Sums
-norm_sum = colors.LogNorm(vmin=179, vmax=2.5e6)
-kws_sum = dict(norm=norm_sum, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
+norm_sum = colors.Normalize(vmin=100, vmax=6000)
+kws_sum = dict(norm=norm_sum, cmap=cmap, rasterized=True, zorder=10, add_colorbar=False)
 #annual_g_sum.sel(TIME='2019').rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws_sum)
-d19.annual_net_growth_sum.rio.clip(basins.geometry.values).plot(ax=axes[0,0], **kws_sum)
+xr.apply_ufunc(to_kgDWgrid, d19.annual_net_growth_sum.rio.clip(basins.geometry.values)).plot(ax=axes[0,0], **kws_sum)
 axes[0,0].set_title('2019')
 label_panel(axes[0,0], next(letgen))
 
-d22.annual_net_growth_sum.rio.clip(basins.geometry.values).plot(ax=axes[0,1], **kws_sum)
+xr.apply_ufunc(to_kgDWgrid, d22.annual_net_growth_sum.rio.clip(basins.geometry.values)).plot(ax=axes[0,1], **kws_sum)
 axes[0,1].set_title('2022')
 label_panel(axes[0,1], next(letgen))
 
 from matplotlib import cm
 cbar_sum = fig.add_axes((0.9, 0.55, 0.04, 0.3))
-cbar_sum_kws = {'label':'Total biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
+cbar_sum_kws = {'label':LABEL_TOT_GN_PX, 'shrink':0.8}
 plt.colorbar(mappable=cm.ScalarMappable(norm=norm_sum, cmap=cmap), cax=cbar_sum, **cbar_sum_kws)
 
 
 # Maxes
 norm_max = colors.Normalize(vmin=0, vmax=30000)
-kws_max = dict(norm=norm_max, cmap=cmap, rasterized=True, zorder=100, add_colorbar=False)
+kws_max = dict(norm=norm_max, cmap=cmap, rasterized=True, zorder=10, add_colorbar=False)
 d19.annual_pop_max.rio.clip(basins.geometry.values).plot(ax=axes[1,0], **kws_sum)
 axes[1,0].set_title('')
 label_panel(axes[1,0], next(letgen))
@@ -1229,16 +1259,15 @@ axes[1,1].set_title('')
 label_panel(axes[1,1], next(letgen))
 
 cbar_max = fig.add_axes((0.9, 0.15, 0.04, 0.3))
-cbar_max_kws={'label':'Max. biomass (ng DW ml$^{-1}$)', 'shrink':0.8}
+cbar_max_kws={'label':LABEL_PMAX, 'shrink':0.8}
 plt.colorbar(mappable=cm.ScalarMappable(norm=norm_max, cmap=cmap), cax=cbar_max, **cbar_max_kws)
 
-
+draw_labels = {"left": "y"}
 for ax in axes.flatten():
-    plot_base(ax)
+    _gl = plot_base(ax, grid_labels=draw_labels)
+    draw_labels = False
 
 plt.savefig(os.path.join(RESULTS, 'fig_map_sum_max_QMC_2019_2022.pdf'), dpi=300, bbox_inches='tight')
-
-## To do -add scale bar
 
 # %% [markdown]
 # ### Supplementary Figure: annual bloom extents, year by year
@@ -1275,15 +1304,6 @@ plt.savefig(os.path.join(RESULTS, 'fig_suppl_annual_bloom_max.pdf'), dpi=300, bb
 
 # %% [markdown]
 # ## Fig. 6: Time-series / Sector-by-sector analysis
-#
-# Need to normalise by area. The max approach doesn't do this, because in areas like the SW with bigger blooms, the boxplots of max get 'depressed' - even though the sample size is much bigger.
-
-# %% trusted=true
-# Melt time series
-mar_melt = xr.open_mfdataset(INPUTS_PATH, preprocess=lambda ds: ds.ME)
-
-# %% trusted=true
-mar_melt
 
 # %% trusted=true
 qmc_med = open_model_run(os.path.join(RESULTS, fn_annual_summary.format(year='*', q=50)))
@@ -1291,17 +1311,31 @@ qmc_q25 = open_model_run(os.path.join(RESULTS, fn_annual_summary.format(year='*'
 qmc_q75 = open_model_run(os.path.join(RESULTS, fn_annual_summary.format(year='*', q=75))).rio.write_crs(CRS)
 
 # %% trusted=true
+KG_TO_T = 0.001
+
+# Calculate ice-sheet-wide, convert to tonnes
+gris_med = (xr.apply_ufunc(to_kgDWgrid, qmc_med.annual_net_growth_sum, dask='allowed') * (mar.MSK/100)).sum(dim=('x','y')) * KG_TO_T
+gris_25 = (xr.apply_ufunc(to_kgDWgrid, qmc_q25.annual_net_growth_sum, dask='allowed') * (mar.MSK/100)).sum(dim=('x','y')) * KG_TO_T
+gris_75 = (xr.apply_ufunc(to_kgDWgrid, qmc_q75.annual_net_growth_sum, dask='allowed') * (mar.MSK/100)).sum(dim=('x','y')) * KG_TO_T
+
 # Calculate sums of bloom size per each elevation class in each sector of the ice sheet.
 store = {}
 store_q75 = {}
 store_q25 = {}
 for ix, sector in basins.iterrows():
-    d = qmc_med.annual_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True)
+    d = xr.apply_ufunc(to_kgDWgrid, qmc_med.annual_net_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True), dask='allowed') * (mar.MSK/100)
     sh = mar.SH.rio.clip([sector.geometry], all_touched=True, drop=True)
-    sector_sum_bio_by_elev = d.groupby_bins(sh, bins=np.arange(0,2200, 400), labels=np.arange(0,2000, 400)).sum().to_pandas()
+    sector_sum_bio_by_elev = d.groupby_bins(sh, bins=np.arange(0,2200, 400), labels=np.arange(0,2000, 400)).sum().to_pandas() * KG_TO_T
     store[sector.SUBREGION1] = sector_sum_bio_by_elev
-    store_q75[sector.SUBREGION1] = qmc_q75.annual_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True).sum(dim=('x','y')) 
-    store_q25[sector.SUBREGION1] = qmc_q25.annual_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True).sum(dim=('x','y'))
+    q75 = xr.apply_ufunc(to_kgDWgrid, qmc_q75.annual_net_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True), dask='allowed') * (mar.MSK/100)
+    q25 = xr.apply_ufunc(to_kgDWgrid, qmc_q25.annual_net_growth_sum.rio.clip([sector.geometry], all_touched=True, drop=True), dask='allowed') * (mar.MSK/100)
+    store_q75[sector.SUBREGION1] = q75.sum(dim=('x','y')) * KG_TO_T
+    store_q25[sector.SUBREGION1] = q25.sum(dim=('x','y')) * KG_TO_T
+
+# %% trusted=true
+# Load the GEUS SMB dataset, downloaded from their dataverse.
+mb = pd.read_csv(os.path.join(WORK_ROOT, 'MB_SMB_D_BMB_ann.csv'), index_col='time', parse_dates=True)
+smb = mb.loc['2000-01-01':'2022-01-01'].SMB
 
 # %% trusted=true
 fig, axes = plt.subplots(figsize=(5,6), ncols=2, nrows=4)
@@ -1309,58 +1343,63 @@ axes = axes.flatten()
 
 letgen = letters()
 
+# All sectors biomass
 ax = axes[0]
-ax.fill_between(qmc_med['TIME'], qmc_q25.annual_growth_sum.sum(dim=('x','y')), qmc_q75.annual_growth_sum.sum(dim=('x','y')), color='grey', alpha=0.5, edgecolor='none')
-ax.plot(qmc_med['TIME'], qmc_med.annual_growth_sum.sum(dim=('x','y')), color='k')
+ax.fill_between(qmc_med['TIME'], gris_25, gris_75, color='grey', alpha=0.5, edgecolor='none')
+ax.plot(qmc_med['TIME'], gris_med, color='k')
 ax.xaxis.set_major_locator(dates.YearLocator(5))
+# ax.annotate('All sectors', xy=(0.04, 0.78), xycoords='axes fraction', style='italic',
+#            horizontalalignment='left', verticalalignment='top', fontsize=8)
+ax.set_ylim(0, 10000)
 label_panel(ax, next(letgen))
-ax.annotate('All sectors', xy=(0.04, 0.78), xycoords='axes fraction', style='italic',
-           horizontalalignment='left', verticalalignment='top', fontsize=8)
 
+# All sectors SMB
+axr = ax.twinx()
+axr.plot(smb.index, smb, zorder=1, color='gray', linestyle='--')
+axr.set_ylabel('SMB (Gt)', color='gray', y=1.2, rotation=0)
+axr.spines['right'].set_color('gray')
+axr.tick_params(axis='y', colors='gray')
+axr.set_ylim(0, 500)
+axr.set_yticks([0, 250, 500])
+
+sns.despine(ax=ax)
+sns.despine(ax=axr, right=False, top=True)
+
+# Sector by sector biomass
 n = 1
 for s in ['NO','NW','NE','CW','CE','SW','SE']:
     r = store[s]
+    
     ax = axes[n]
-    #sns.cubehelix_palette(n_colors=5, start=.7, rot=-.75, reverse=True)
     ax.stackplot(r.index, r.T, labels=r.columns, colors=sns.color_palette('flare_r', n_colors=5), edgecolor='none', linewidth=0)
-    ax.vlines(r.index, store_q25[s].T, store_q75[s].T, color='k', linewidth=0.5, alpha=0.8)
-    ax.set_ylim(0, 5e8)
-    #ax.set_title(s, y=0.77, loc='center')
+    ax.vlines(r.index, store_q25[s].T, store_q75[s].T, color='k', linewidth=1, alpha=0.8)
+    ax.set_ylim(0, 1400)
     ax.xaxis.set_major_locator(dates.YearLocator(5))
+    
     label_panel(ax, next(letgen))
     ax.annotate(s, xy=(0.04, 0.75), xycoords='axes fraction', style='italic',
            horizontalalignment='left', verticalalignment='top')
-    
+    sns.despine(ax=ax)
     n += 1
+
 ax.legend(loc=(1,0.1), frameon=False, title='Elev. m', title_fontsize=SMALL_SIZE)
-sns.despine()
-plt.subplots_adjust(hspace=0.5)
-
-fig.text(0.05, 0.5, f'Total biomass ({UNIT_DW})', va='center', rotation=90)
-
+plt.subplots_adjust(hspace=0.5, wspace=0.4)
+fig.text(0.025, 0.5, LABEL_TOT_GN_T, va='center', rotation=90)
 plt.savefig(os.path.join(RESULTS, 'fig_sectors_annual_sum_qmc_med.pdf'), bbox_inches='tight')
 
 # %% trusted=true
-# # GrIS context map
-# crs = ccrs.NorthPolarStereo(central_longitude=-45., true_scale_latitude=70.)
-# ax_gris = plt.subplot(111, projection=crs)
-# jgg_gdf.plot(ax=ax_gris, color='#CDB380', edgecolor='none', alpha=1, zorder=1)
+with pd.ExcelWriter(os.path.join(RESULTS, 'fig6.xlsx')) as w:
+    main_ts = np.round(pd.concat([qmc_med, gris_25, gris_75], axis=1), 1)
+    main_ts.columns = ['SigmaGn_median_tonnesDW', 'SigmaGn_q25_tonnesDW', 'SigmaGn_q75_tonnesDW']
+    main_ts.to_excel(w, sheet_name='A_GrIS')
 
-# gris_outline.plot(ax=ax_gris, color='whitesmoke', edgecolor='none', alpha=1, zorder=2)
-# cmap = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
-# norm = colors.LogNorm(vmin=179, vmax=2.5e6)
-# kws = dict(norm=norm, cmap=cmap, rasterized=True)
-# annual_g_sum.mean(dim='TIME').rio.clip(basins.geometry.values).plot(ax=ax_gris, zorder=10, **kws)
-
-# basins.plot(ax=ax_gris, color='None', edgecolor='Grey', linewidth=0.5, zorder=20)
-# ax_gris.axis('off')
-# for ix, basin in basins.iterrows():
-#     if basin.SUBREGION1 in ['SE', 'CE']:
-#         continue
-#     x, y = basin.geometry.centroid.xy
-#     ax_gris.text(x[0], y[0], basin.SUBREGION1, ha='center', va='center', fontsize=9, zorder=30)
-# plt.title('')
-# plt.savefig(os.path.join(RESULTS, 'fig_sectors_average_sum_map.pdf'), bbox_inches='tight')
+    letgen = letters(start=1)
+    for s in ['NO','NW','NE','CW','CE','SW','SE']:
+        reg_ts = np.round(pd.concat([store[s], store_q25[s], store_q75[s]], axis=1), 1)
+        reg_ts.columns = ['SigmaGn_median_tonnesDW', 'SigmaGn_q25_tonnesDW', 'SigmaGn_q75_tonnesDW']
+        name = '{L}_{S}'.format(L=next(letgen).upper(), S=s)
+        reg_ts.to_excel(w, sheet_name=name)
+    
 
 # %% [markdown]
 # ## Extent of blooms / % coverage of ice sheet by blooms and trend analysis
@@ -1369,7 +1408,47 @@ plt.savefig(os.path.join(RESULTS, 'fig_sectors_annual_sum_qmc_med.pdf'), bbox_in
 #annual_biomass.where(annual_biomass > 179).mean(dim='TIME').mean().compute()
 
 # %% trusted=true
-annual_biomass = main_outputs.cum_growth.where(mar.MSK > 50).where(main_outputs.cum_growth > 179).resample(TIME='1AS').sum(dim='TIME')
+def calc_bloom_extent(thresh_pop):
+    bloom_extent_sqkm = ((qmc_med.annual_pop_max > thresh_pop) * (mar.MSK/100) * 10**2).sum(dim=('x','y')).to_pandas()
+    bloom_extent_sqkm_q25 = ((qmc_q25.annual_pop_max > thresh_pop) * (mar.MSK/100) * 10**2).sum(dim=('x','y')).to_pandas()
+    bloom_extent_sqkm_q75 = ((qmc_q75.annual_pop_max > thresh_pop) * (mar.MSK/100) * 10**2).sum(dim=('x','y')).to_pandas()
+    bloom_extent_df = pd.concat([bloom_extent_sqkm, bloom_extent_sqkm_q25, bloom_extent_sqkm_q75], axis=1)
+    bloom_extent_df.columns = ['med', 'q25', 'q75']
+    bloom_extent_df['year'] = bloom_extent_df.index.year
+    return bloom_extent_df
+extent_179 = calc_bloom_extent(179)
+extent_2000 = calc_bloom_extent(2000)
+
+# %% trusted=true
+fig, ax = plt.subplots(figsize=(3.5,2))
+
+extent_179.med.plot(marker='.', linewidth=0.5, ax=ax, label=f'Min. P 179 {UNIT_DW}')
+extent_2000.med.plot(marker='.', linewidth=0.5, ax=ax, label=f'Min. P 2000 {UNIT_DW}')
+ax.fill_between(extent_2000.index, extent_2000.q25, extent_2000.q75, alpha=0.2, color='tab:orange')
+plt.ylabel('Bloom extent (sq km)')
+plt.ylim(0, 5e5)
+plt.xlabel('')
+sns.despine()
+plt.legend(frameon=False)
+
+# %% trusted=true
+extent_179.corr(method='spearman')**2
+
+# %% trusted=true
+extent_2000.corr(method='spearman')**2
+
+# %% trusted=true
+m = sm.OLS(extent_179.med, sm.add_constant(extent_179.year))
+f = m.fit()
+f.summary()
+
+# %% trusted=true
+m = sm.OLS(extent_2000.med, sm.add_constant(extent_2000.year))
+f = m.fit()
+f.summary()
+
+# %% trusted=true
+annual_biomass = main_outputs.annual_netcum_growth.where(mar.MSK > 50).where(main_outputs.cum_growth > 179).resample(TIME='1AS').sum(dim='TIME')
 as_perc = (100 / ((mar.MSK > 50).sum() * 10**2) * ((annual_biomass > 179).sum(dim=('x','y')) * 10**2)) #
 as_perc.plot(label='all blooms')
 big_as_perc = (100 / ((mar.MSK > 50).sum() * 10**2) * ((annual_biomass > 435364).sum(dim=('x','y')) * 10**2)) #
@@ -1392,48 +1471,34 @@ r = m.fit()
 print(r.summary())
 
 # %% [markdown]
-# ## GrIS wide min and max bloom productivity statistics
-
-# %% trusted=true
-annual_g_sum_griswide = annual_g_sum.sum(dim=('x','y'))
-
-# %% trusted=true
-annual_g_sum_griswide.idxmin()
-
-# %% trusted=true
-annual_g_sum_griswide.min()
-
-# %% trusted=true
-annual_g_sum_griswide.idxmax()
-
-# %% trusted=true
-annual_g_sum_griswide.max()
+# ## Statistics for text
 
 # %% [markdown]
-# ## Organic carbon production potential
+# ### GrIS wide min and max bloom productivity statistics
 
 # %% trusted=true
-# Annual total C ...
-# Need to mask by last productive day?
-# And need to first convert to cells ml, from ng DW ml???
-carbon = to_carbon(annual_g_sum)
-total_carbon = carbon.sum(dim=('x','y')).compute()
+biom_df = np.round(pd.concat([gris_med.to_pandas(), gris_25.to_pandas(), gris_75.to_pandas()], axis=1), 0)
+biom_df.columns = ['med', 'q25', 'q75']
+biom_df.to_csv(os.path.join(RESULTS, 'gris_wide_biomass_production_tonnes.csv'))
+biom_df
+
+
+# %% [markdown]
+# ### Organic carbon production potential
+
+# %% trusted=true
+def compute_carb(ds):
+    return to_carbon((xr.apply_ufunc(dw_to_ww, ds.annual_net_growth_sum, dask='allowed') * (mar.MSK/100)).sum(dim=('x','y'))).compute().to_pandas() * KG_TO_T
 
 
 # %% trusted=true
-total_carbon
-
-# %% trusted=true
-total_carbon.min()
-
-# %% trusted=true
-total_carbon.idxmin()
-
-# %% trusted=true
-total_carbon.max()
-
-# %% trusted=true
-total_carbon.idxmax()
+carb_med = compute_carb(qmc_med)
+carb_q25 = compute_carb(qmc_q25)
+carb_q75 = compute_carb(qmc_q75)
+carb_df = np.round(pd.concat([carb_med, carb_q25, carb_q75], axis=1), 0)
+carb_df.columns = ['med', 'q25', 'q75']
+carb_df.to_csv(os.path.join(RESULTS, 'gris_wide_carbon_production_tonnes.csv'))
+carb_df
 
 # %% [markdown]
 # ## UPE: Compare MAR with PROMICE
