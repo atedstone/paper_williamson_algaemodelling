@@ -68,7 +68,7 @@ if __name__ == '__main__':
     mar['y'] = mar['y'] * 1000
     mar = mar.rio.write_crs('epsg:3413')
 
-    for expt_id in range(35, NQMC+1):
+    for expt_id in range(0, NQMC+1):
     
         print(expt_id)
     
