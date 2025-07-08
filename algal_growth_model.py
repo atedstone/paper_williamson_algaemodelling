@@ -26,7 +26,7 @@ from scipy.stats import qmc
 # octopus
 inputs_path = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-{year}_05-09_ALGV.nc' 
 mar_example = '/work/atedstone/williamson/MARv3.13-ERA5/MARv3.13-10km-ERA5-2000_05-09_ALGV.nc'
-output_path = '/work/atedstone/williamson/outputs/' #2025-05/'
+output_path = '/work/atedstone/williamson/outputs/QMC/' 
 from dask.distributed import LocalCluster as MyCluster
 from dask.distributed import Client
 
