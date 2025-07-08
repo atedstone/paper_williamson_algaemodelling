@@ -73,7 +73,7 @@ if __name__ == '__main__':
         print(expt_id)
     
         # Open all years of this experiment run
-        expt_outputs = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'model_outputs_*_exp{expt_id}.nc'))
+        expt_outputs = open_model_run(os.path.join(WORK_ROOT, 'outputs/QMC', f'model_outputs_*_exp{expt_id}.nc'))
         expt_outputs = expt_outputs.chunk({'TIME':153})
         
         # Find annual last productive day in each grid cell.
