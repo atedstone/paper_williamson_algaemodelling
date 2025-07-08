@@ -111,7 +111,7 @@ MODEL_OUTPUTS_SENS_LIGH = os.path.join(WORK_ROOT, 'outputs/sensitivity_light')
 MODEL_OUTPUTS_SENS_SNOW = os.path.join(WORK_ROOT, 'outputs/sensitivity_snowdepth')
 
 # Main run of algal growth model
-MODEL_OUTPUTS_MAIN = os.path.join(WORK_ROOT, '2025-05')
+MODEL_OUTPUTS_MAIN = os.path.join(WORK_ROOT, 'outputs', 'QMC')
 NQMC = 512
 
 # File containing experiment design
@@ -254,7 +254,7 @@ def get_qmc_ts(year, geom=None, qm_metrics=False, nqmc=NQMC):
     for exp in range(1, nqmc+1):
         print(exp)
         # Open the numbered experiment
-        r = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'model_outputs_{year}_exp{exp}.nc'))
+        r = open_model_run(os.path.join(MODEL_OUTPUTS_MAIN, f'model_outputs_{year}_exp{exp}.nc'))
         # If subset to Point requested then do this now
         if geom is not None:
             r = r.sel(x=geom.x, y=geom.y, method='nearest')
@@ -318,16 +318,17 @@ def to_kgDWgrid(x, grid_km=10):
 
     return x
 
-def to_carbon(x, grid_km=10):
+def to_carbon(x, quotient, grid_km=10):
     """ 
     x : DataArray. Provide in units of cells per ml
+    quotient : per cell carbon quotient, pg C per cell. e.g. 106 or 420.
     grid_km : size of grid cell in kilometres
      
     returns: kg carbon per model cell
     """
 
-    #convert from cells per ml to pg C ml assuming 106 pg C per cell
-    x = x * 106
+    #convert from cells per ml to pg C ml assuming provided quotient in pg C per cell 
+    x = x * quotient
 
     #- pg C ml to pg C per L
     x = x * 1000
@@ -853,7 +854,7 @@ def find_last_bloom_day_site(year, site_runs, geom, quantiles=[0.25, 0.5, 0.75])
     values = []
     for q in quantiles:
         expt_id = ranked.index[np.abs(ranked - ranked.quantile(q)).argmin()]
-        fn = os.path.join(WORK_ROOT, '2025-05', f'model_outputs_{year}_exp{expt_id}.nc')
+        fn = os.path.join(MODEL_OUTPUTS_MAIN, f'model_outputs_{year}_exp{expt_id}.nc')
         run = open_model_run(fn)
         run = run.sel(x=geom.x, y=geom.y, method='nearest')
         doy = run.TIME.dt.dayofyear
@@ -1174,7 +1175,7 @@ if regenerate:
         
         for exp in range(1, NQMC+1):
             # Open the numbered experiment
-            r = open_model_run(os.path.join(WORK_ROOT, '2025-05', f'model_outputs_{year}_exp{exp}.nc'))
+            r = open_model_run(os.path.join(MODEL_OUTPUTS_MAIN, f'model_outputs_{year}_exp{exp}.nc'))
             for ix, row in meas_subset.iterrows():
                 rr = r.cum_growth.sel(x=row.geometry.x, y=row.geometry.y, method='nearest').sel(TIME=row.date)
                 outputs.append({'date':row.date, 'study':row.study, 'site':row.site, 'exptid':exp, 'biomass_dw':float(rr)})
@@ -1616,17 +1617,26 @@ d_all.annual_pop_max.max(dim=('x','y')).compute().plot()
 # ### Organic carbon production potential
 
 # %% trusted=true
-def compute_carb(ds):
-    return to_carbon((xr.apply_ufunc(dw_to_ww, ds.annual_net_growth_sum, dask='allowed') * (mar.MSK/100)).sum(dim=('x','y'))).compute().to_pandas() * KG_TO_T
+def compute_carb(ds, q):
+    ww = (xr.apply_ufunc(dw_to_ww, ds.annual_net_growth_sum, dask='allowed') * (mar.MSK/100)).sum(dim=('x','y'))
+    carb = to_carbon(ww, q).compute().to_pandas() * KG_TO_T
+    return carb
+
+def compute_carb_at_q(q):
+    carb_med = compute_carb(qmc_med, q)
+    carb_q25 = compute_carb(qmc_q25, q)
+    carb_q75 = compute_carb(qmc_q75, q)
+    carb_df = np.round(pd.concat([carb_med, carb_q25, carb_q75], axis=1), 0)
+    carb_df.columns = ['med', 'q25', 'q75']
+    carb_df.to_csv(os.path.join(RESULTS, f'gris_wide_carbon_production_tonnes_{q}.csv'))
+    return carb_df
 
 
 # %% trusted=true
-carb_med = compute_carb(qmc_med)
-carb_q25 = compute_carb(qmc_q25)
-carb_q75 = compute_carb(qmc_q75)
-carb_df = np.round(pd.concat([carb_med, carb_q25, carb_q75], axis=1), 0)
-carb_df.columns = ['med', 'q25', 'q75']
-carb_df.to_csv(os.path.join(RESULTS, 'gris_wide_carbon_production_tonnes.csv'))
-carb_df
+carb_q106 = compute_carb_at_q(106)
+carb_q420 = compute_carb_at_q(420)
+
+# %% trusted=true
+carb_q420
 
 # %% trusted=true
