@@ -110,3 +110,11 @@ This takes files from the previous script as inputs. It calculates annual metric
 All figures and statistics are produced using `main_analysis.py` opened as a Jupyter Notebook. (Use the Jupytext extension).
 
 Note that full analysis requires various ancillary files (e.g. Greenland drainage basin definitions) to be available. The paths are specified in the 'Paths/Settings' section of the Notebook. All data are available as specified in the 'Data Availability' section of the manuscript.
+
+
+#### Interim processing files which are redundant due to final figure outputs
+
+* `sens_analysis_s6_ibio_{param}.csv` --> Fig 1 xlsx
+* `sens_analysis_s6_ploss_{param}.csv` --> Fig 1 xlsx
+* `qmc_ts_Gn_{site}_{year}.csv` --> Fig 3 xlsx
+* `qmc_ts_dailypop_{site}_{year}.csv` --> Fig 3 xlsx
