@@ -83,7 +83,7 @@ Some model runs conducted for this study were not set up to export `today_prod_n
 
 ### Pre-processing/data reduction
 
-Concerning the QMC ensemble, there are two computationally intensive workflows of pre-processing required ahead of analysis/interpretation.
+Concerning the QMC ensemble, there are three computationally intensive workflows of pre-processing required ahead of analysis/interpretation.
 
 #### Metrics of each QMC run
 
@@ -103,6 +103,21 @@ Export these into one NetCDF per QMC run, spanning all the years of analysis. Ou
 Use `calculate_qmc_ensemble_metrics.py`.
 
 This takes files from the previous script as inputs. It calculates annual metrics of the whole QMC ensemble at specific quantiles (median, 25th, 75th), for all variables in the input files. Output file name format: `model_outputs_QMCE_<year>_q<quantile>.nc`.
+
+
+#### Daily time series from ensemble
+
+Use `calculate_qmc_daily_MIQR.py`. This script runs on a per-year basis. Use it to generate time/x/y netcdfs of the median, 25th and 75th percentile ensemble values. These netcdfs are used as inputs for:
+
+- Fig. 5 comparison of measured vs modelled
+
+
+N.b. that there is some redundancy/overlap with respect to the function `get_qmc_ts()` in `main_analysis.py` - this function works only at a single X/Y coordinate whereas the script here generates a time series for all cells.
+
+
+#### Compilation of field (in-situ) datasets
+
+We compile in-situ cell counts made by others using the script `prepare_validation_datasets.py`. This script ingests a mixture of (a) files taken directly from data repositories and (b) files created by AT/CW by tabulating cell counts taken from tables/text in the original manuscripts. This script produces a signal output CSV file that is taken forward to `main_analysis.py`.
 
 
 ### Figures and statistics

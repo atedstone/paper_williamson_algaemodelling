@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.17.1
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -29,8 +29,8 @@ from dask.distributed import Client
 WORK_ROOT = '/work/atedstone/williamson/'
 RESULTS = os.path.join(WORK_ROOT, 'results')
 NQMC = 512
-YR_ST = 2017
-YR_END = 2017
+YR_ST = 2018
+YR_END = 2019
 START_POP = 179
 
 MAR_REF = os.path.join(WORK_ROOT, 'MARv3.14.0-10km-daily-ERA5-2022.nc')
@@ -76,5 +76,9 @@ if __name__ == '__main__':
     
         expt_outputs.close()
         cluster = None
+
+# %%
+
+# %%
 
 # %%
