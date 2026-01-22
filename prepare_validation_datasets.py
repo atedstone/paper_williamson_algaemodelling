@@ -144,8 +144,10 @@ halb = halb.rename({bmc:RENAME_TO}, axis='columns')
 halb = pd.merge(left=halb, right=pd.DataFrame(halb_meta).T, left_on='site', right_index=True)
 halb['d_id'] = 'halb'
 halb['biomass_col'] = bmc
+# Remove mit1_2 as this was snow-only, i.e. not bare ice (their Table S1).
+halb = halb[halb.site != 'mit1_2']
 
-# NO STANDARD DEVIATION REPORTED - SO DON'T INCLUDE IN OUR VALIDATION.
+# LUTZ: NO STANDARD DEVIATION REPORTED - SO DON'T INCLUDE IN OUR VALIDATION.
 # Lutz Mittivakkat dataset does not provide exact dates, so force the mid-date of their campaign (6-23 July 2012)
 # All values were acquired within a 1 km2 area, so also okay to force a single coordinate.
 # bmc = 'cells.ml'

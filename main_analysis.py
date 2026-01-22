@@ -1198,6 +1198,9 @@ for year in ['2019', '2022']:
 # %% [markdown]
 # ## Fig. 5: Measured-modelled comparison
 
+# %% [markdown]
+# ## Pt 1: Point-to-point comparisons
+
 # %% trusted=true
 meas = pd.read_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'), index_col=0)
 geom = gpd.GeoSeries.from_wkt(meas.geom)
@@ -1230,32 +1233,6 @@ if regenerate:
                            'modelled.75':float(rr.q75.values)})
 
     pts_modelled = pd.DataFrame(outputs)
-    
-    # Now need to reduce the DataFrame so that we have only one row for each site-date combination
-    # which can then be merged back onto the df with the measured values.
-    
-    # q25 = pts_modelled.groupby(['study', 'date', 'site']).biomass_dw.quantile(0.25)
-    # q25.name = 'modelled.biomass.dw.q25'
-    # q50 = pts_modelled.groupby(['study', 'date', 'site']).biomass_dw.quantile(0.50)
-    # q50.name = 'modelled.biomass.dw.q50'
-    # q75 = pts_modelled.groupby(['study', 'date', 'site']).biomass_dw.quantile(0.75)
-    # q75.name = 'modelled.biomass.dw.q75'
-    # modelled_merge = pd.concat([q25, q50, q75], axis=1)
-    
-    # meas = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets', 'all_data.csv'), parse_dates=['date'], dayfirst=False, na_values=['NA','#VALUE!'])
-    # meas = meas.drop(columns=['modelled.biomass.dw', 'geom'])
-    #meas['observed.cells.ml.dw'] = pd.to_numeric(meas['observed.cells.ml.dw'])
-    
-    # m = pd.merge(left=meas, right=modelled_merge, left_on=['study', 'date', 'site'], right_on=['study', 'date', 'site'], how='left')
-    # m
-    
-    # Save to CSV files
-    
-    #pts_modelled.to_csv(os.path.join(RESULTS, 'qmc_modelled_at_observed_points_all_expts.csv'))
-    #m.to_csv(os.path.join(RESULTS, 'qmc_modelled_quantiles_vs_observed.csv'))
-
-# %% trusted=true
-meas
 
 # %% trusted=true
 pts_modelled
@@ -1271,78 +1248,6 @@ meas_mod = meas_mod.drop_duplicates()
 
 # %% trusted=true
 meas_mod.to_csv(os.path.join(RESULTS, 'Fig5A_measurements_vs_QMC_modelled.csv'), index=False)
-
-# %% [markdown]
-# ### Pt 1: Extract QMC data for 'offline' analysis
-#
-# These data are then analysed by C.W. locally, before being loaded back in below under a new CSV filename.
-
-# %% trusted=true
-# data = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets', 'all_data.csv'), parse_dates=['date'], dayfirst=False)
-
-# # Apply a year column so that we can easily iterate through the QMC runs by year
-# data['year'] = data.date.dt.year
-
-# # Convert the geometry column to proper Geometry (n.b this is basically redundant with respect to `site` column)
-# data = gpd.GeoDataFrame(data, geometry=gpd.GeoSeries.from_wkt(data['geom'], crs=3413))
-# data = data.drop(columns=['geom'])
-
-# # The provided CSV often contains lots of observed values on a single day at a given site.
-# # There is no need to repeatedly query for the same modelled value at this given site, so drop these duplicates away.
-# data = data.groupby(['study', 'site', 'date']).first()
-
-# # To avoid confusion, remove the columns that we are not using here at the moment.
-# data = data.drop(columns=['observed.cells.ml', 'modelled.biomass.dw', 'observed.cells.ml.dw'])
-
-# # Reset the index after the groupby operation produced a MultiIndex.
-# data = data.reset_index()
-
-
-# %% trusted=true
-
-# %% trusted=true
-# # This is expensive because we need to open all the QMC experiments in a given year
-# regenerate = False
-
-# if regenerate:
-
-
-#     outputs = []
-#     for year in data['year'].unique():
-#         print(year)
-#         meas_subset = data[data.year == year]
-        
-#         for exp in range(1, NQMC+1):
-#             # Open the numbered experiment
-#             r = open_model_run(os.path.join(MODEL_OUTPUTS_MAIN, f'model_outputs_{year}_exp{exp}.nc'))
-#             for ix, row in meas_subset.iterrows():
-#                 rr = r.cum_growth.sel(x=row.geometry.x, y=row.geometry.y, method='nearest').sel(TIME=row.date)
-#                 outputs.append({'date':row.date, 'study':row.study, 'site':row.site, 'exptid':exp, 'biomass_dw':float(rr)})
-
-#     pts_modelled = pd.DataFrame(outputs)
-    
-#     # Now need to reduce the DataFrame so that we have only one row for each site-date combination
-#     # which can then be merged back onto the df with the measured values.
-    
-#     q25 = pts_modelled.groupby(['study', 'date', 'site']).biomass_dw.quantile(0.25)
-#     q25.name = 'modelled.biomass.dw.q25'
-#     q50 = pts_modelled.groupby(['study', 'date', 'site']).biomass_dw.quantile(0.50)
-#     q50.name = 'modelled.biomass.dw.q50'
-#     q75 = pts_modelled.groupby(['study', 'date', 'site']).biomass_dw.quantile(0.75)
-#     q75.name = 'modelled.biomass.dw.q75'
-#     modelled_merge = pd.concat([q25, q50, q75], axis=1)
-    
-#     meas = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets', 'all_data.csv'), parse_dates=['date'], dayfirst=False, na_values=['NA','#VALUE!'])
-#     meas = meas.drop(columns=['modelled.biomass.dw', 'geom'])
-#     #meas['observed.cells.ml.dw'] = pd.to_numeric(meas['observed.cells.ml.dw'])
-    
-#     m = pd.merge(left=meas, right=modelled_merge, left_on=['study', 'date', 'site'], right_on=['study', 'date', 'site'], how='left')
-#     m
-    
-#     # Save to CSV files
-#     pts_modelled.to_csv(os.path.join(RESULTS, 'qmc_modelled_at_observed_points_all_expts.csv'))
-#     m.to_csv(os.path.join(RESULTS, 'qmc_modelled_quantiles_vs_observed.csv'))
-
 
 # %% [markdown]
 # ### Pt 2: Extract daily time series to compare with Stibal 2017 (2014 data)
@@ -1410,18 +1315,13 @@ bounds = pd.read_csv(os.path.join(RESULTS, 'extra_for_ted.csv'))
 # plt.tight_layout()
 
 # %% trusted=true
-# observed_n = pd.read_csv(os.path.join(RESULTS, 'qmc_modelled_quantiles_vs_observed.csv'), index_col=0, parse_dates=['date'])
-# observed_n = m.groupby(['study', 'date'])['observed.cells.ml'].count()
-# observed_n.name = 'observed_n'
-
-# %% trusted=true
 # Stibal measurements
 stib_ts = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets', 'all_data.csv'), parse_dates=['date'], dayfirst=False, na_values=['#VALUE!'])
 stib_ts = stib_ts[stib_ts.study == 'stib']
-stib_ts
+stib_ts.head()
 
 # %% trusted=true
-mmdf
+mmdf.head()
 
 # %% trusted=true
 plt.figure(figsize=(8, 2.5))
