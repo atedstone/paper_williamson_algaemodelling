@@ -1,8 +1,8 @@
 # CODE README
 
-Modelling and analysis for **'Simulation of glacier ice algal bloom on the Greenland Ice Sheet'** by Williamson and Tedstone, submitted to ISME, summer 2025.
+Modelling and analysis for **'Simulation of glacier ice algal bloom on the Greenland Ice Sheet'** by Williamson and Tedstone, NComms Earth and Env.
 
-Author: Andrew Tedstone (andrew.tedstone@unil.ch), July 2025.
+Author: Andrew Tedstone (andrew.tedstone@unil.ch), July 2025 and January 2026.
 
 For expected outputs of these codes, see the paper's data repository.
 
@@ -107,27 +107,24 @@ This takes files from the previous script as inputs. It calculates annual metric
 
 #### Daily time series from ensemble
 
-Use `calculate_qmc_daily_MIQR.py`. This script runs on a per-year basis. Use it to generate time/x/y netcdfs of the median, 25th and 75th percentile ensemble values. These netcdfs are used as inputs for:
+Use `calculate_qmc_daily_MIQR.py`. This script runs on a per-year basis. Use it to generate time/x/y netcdfs of the median, 25th and 75th percentile ensemble values. These netcdfs are used as inputs for Fig. 5A,B.
 
-- Fig. 5 comparison of measured vs modelled
-
-
-N.b. that there is some redundancy/overlap with respect to the function `get_qmc_ts()` in `main_analysis.py` - this function works only at a single X/Y coordinate whereas the script here generates a time series for all cells.
+(N.b. there is some overlap with respect to the function `get_qmc_ts()` in `main_analysis.py` - this function works only at a single X/Y coordinate whereas the script here generates a time series for all cells. `get_qmc_ts()` is used to retrieve the time series of every QMC run at a given site. It is used for Fig. 4.)
 
 
 #### Compilation of field (in-situ) datasets
 
-We compile in-situ cell counts made by others using the script `prepare_validation_datasets.py`. This script ingests a mixture of (a) files taken directly from data repositories and (b) files created by AT/CW by tabulating cell counts taken from tables/text in the original manuscripts. This script produces a signal output CSV file that is taken forward to `main_analysis.py`.
+We compile in-situ cell counts made by others using the script `prepare_validation_datasets.py`. This script ingests a mixture of (a) files taken directly from data repositories and (b) files created by AT/CW by tabulating cell counts taken from tables/text in the original manuscripts. This script produces a single output Excel file that is taken forward to `main_analysis.py`.
 
 
 ### Figures and statistics
 
-All figures and statistics are produced using `main_analysis.py` opened as a Jupyter Notebook. (Use the Jupytext extension).
+All figures and statistics are produced using `main_analysis.py` running as a Jupyter Notebook (using the Jupytext extension).
 
-Note that full analysis requires various ancillary files (e.g. Greenland drainage basin definitions) to be available. The paths are specified in the 'Paths/Settings' section of the Notebook. All data are available as specified in the 'Data Availability' section of the manuscript.
+Note that full analysis requires various ancillary files (e.g. Greenland drainage basin definitions) to be available. The paths are specified in the 'Paths/Settings' section of the script. All data are available as specified in the 'Data Availability' section of the manuscript.
 
 
-#### Interim processing files which are redundant due to final figure outputs
+#### Interim processing files which are redundant due to final figure output data files
 
 * `sens_analysis_s6_ibio_{param}.csv` --> Fig 1 xlsx
 * `sens_analysis_s6_ploss_{param}.csv` --> Fig 1 xlsx

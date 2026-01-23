@@ -18,7 +18,7 @@
 # %% [markdown]
 # # Compile measured cell counts from the literature
 #
-# These cell counts are then used to undertake validation in `main_analysis.py`.
+# These cell counts are used to undertake validation in `main_analysis.py`. They underlie Fig. 5A only. Figs 5B and Suppl. Fig 3 are treated separately (all preparation in `main_analysis.py`).
 
 # %% trusted=true
 import pandas as pd
@@ -110,7 +110,7 @@ for csv in csvs:
         d['date'] = pd.to_datetime(d['date'], dayfirst=True)
     meas[csv_name] = d
     
-# Load Stibal separately - directly from their Excel Workbook
+# Load Stibal separately - directly from their Excel Workbook in data repository.
 meas['stibal_2017'] = pd.read_excel(os.path.join(MEAS_BIO, 'grl56634-sup-0002-2017gl075958_data_si.xlsx'), sheet_name='algal cells time series data')
 
 # %% trusted=true
@@ -132,6 +132,7 @@ meas['stibal_2017'] = pd.read_excel(os.path.join(MEAS_BIO, 'grl56634-sup-0002-20
 ## South East Greenland 
 
 # Halbach dataset
+# No machine-readable file was deposited with this study - we created input CSV using values provided in manuscript
 bmc = 'av.cells.ml'
 halb = meas['halbach_2019_counts_se_greenland']
 # Taken from Halbach et al. (2022) Table S1
@@ -148,6 +149,7 @@ halb['biomass_col'] = bmc
 halb = halb[halb.site != 'mit1_2']
 
 # LUTZ: NO STANDARD DEVIATION REPORTED - SO DON'T INCLUDE IN OUR VALIDATION.
+# No machine-readable file was deposited with this study - we created input CSV using values provided in manuscript
 # Lutz Mittivakkat dataset does not provide exact dates, so force the mid-date of their campaign (6-23 July 2012)
 # All values were acquired within a 1 km2 area, so also okay to force a single coordinate.
 # bmc = 'cells.ml'
@@ -167,7 +169,8 @@ halb
 ## S6
 
 # stib provides date. Average all the samples on each day.
-# All Stibal values were acquired at S6 (see paper).
+# See direct load-in of original deposited Excel file, above
+# All these Stibal values were acquired at S6 (see paper).
 bmc = 'cells/ml'
 stib = meas['stibal_2017'].filter(items=['doy 2014', bmc], axis='columns').dropna()
 stib['date'] = [dt.datetime.strptime(f'2014-{int(d)}', '%Y-%j') for d in stib['doy 2014']]
@@ -192,6 +195,7 @@ stib['d_id'] = 'stib'
 
 
 # williamson 2016 @ S6 provides date
+# This dataset is exactly as lodged with the BAS Polar Data Centre, https://data.bas.ac.uk/full-record.php?id=GB/NERC/BAS/PDC/01248, file count_biomass_all_2016.csv.
 bmc = 'overall.cells.per.ml'
 w16s6 = meas['williamson_2016_count_biomass_all_2016'].filter(items=['date', 'habitat', bmc], axis='columns').dropna()
 #w16s6['date'] = [dt.datetime.strptime(d, '%d.%m.%y') for d in w16s6['date']]
@@ -294,7 +298,8 @@ w16k
 # %% trusted=true
 ## Upernavik
 
-# We already have coordinate. Check units? 
+# data lodged at https://data.bas.ac.uk/full-record.php?id=GB/NERC/BAS/PDC/01289
+# We already have coordinate. 
 bmc = 'cells.per.ml'
 upe = meas['williamson_2018_upe_u_cell_counts'].filter(items=[bmc], axis='columns')
 samples = upe.count()
@@ -319,6 +324,7 @@ import re
 
 onuma_store = []
 # Treat the CSV loading separately as these are bunch of files in their own folder
+# These are the original files as deposited by Onuma.
 csvs = glob(os.path.join(MEAS_BIO, 'onuma_et_al_2022_point_datasets', '*cell_vol*.csv'))
 for csv in csvs:
     data = pd.read_csv(csv, parse_dates=['date'], dayfirst=True)
@@ -334,7 +340,7 @@ onuma['n.samples'] = 4
 onuma['d_id'] = 'onum'
 onuma = onuma.reset_index()
 
-# Add coordinates
+# Add coordinates, which A.T. estimated from Fig.1 of Onuma2022 as no coordinates were provided in their study materials.
 onuma_pos = pd.read_csv(os.path.join(MEAS_BIO, 'onuma_et_al_2022_point_datasets', 'onuma_site_coords_eyeballed.csv'))
 onuma_pos['site'] = 'QAN-' + onuma_pos['site']
 onuma_pos = gpd.GeoDataFrame(onuma_pos, geometry=gpd.points_from_xy(onuma_pos.lon, onuma_pos.lat, crs=4326))
@@ -346,8 +352,8 @@ onuma = onuma.rename(columns={'geometry':'geom'})
 onuma.head()
 
 # %% trusted=true
-## Stibal 2013 pan-GrIS counts
-
+# Stibal 2013 pan-GrIS counts
+# This file was created by tabulating the contents of Stibal 2017 Supplementary Table 1
 additional_stibal = pd.read_csv(os.path.join(MEAS_BIO, 'stibal2017_counts2013.csv'), parse_dates=['date'], dayfirst=True)
 
 # convert coords to decimal degrees
@@ -355,8 +361,6 @@ lat_dd = additional_stibal.lat_d + (additional_stibal.lat_m / 60)
 lon_dd = additional_stibal.lon_d + (additional_stibal.lon_m / 60)
 additional_stibal['geom'] = gpd.points_from_xy(lon_dd, lat_dd, crs='4326')
 
-#additional_stibal['lon'] = lon_dd
-#additional_stibal['lat'] = lat_dd
 additional_stibal = additional_stibal.rename({'abundance_cells_ml':RENAME_TO, 'abundance_cells_ml_sd':'sd'}, axis='columns')
 additional_stibal = additional_stibal.filter(items=['site', RENAME_TO, 'sd', 'date', 'geom'], axis='columns')
 additional_stibal['d_id'] = 'stib13'
@@ -402,12 +406,11 @@ measurements = gpd.GeoDataFrame(measurements, geometry='geom', crs='epsg:4236')
 measurements = measurements.to_crs(3413)
 
 # %% trusted=true
-pd.to_datetime(measurements.date).dt.year.unique()
-
-# %% trusted=true
-#measurements.to_file(os.path.join(RESULTS,'measurements_merged.gpkg'))
-
-# %% trusted=true
 measurements.to_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'))
+
+# %% trusted=true
+# Statistics for text
+print('N. samples: ', measurements['n.samples'].sum())
+print('N. obs: ', len(measurements))
 
 # %% trusted=true

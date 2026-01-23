@@ -103,6 +103,9 @@ LAND_AREAS_FILE = os.path.join(GIS_ROOT, 'ne_10m_land/ne_10m_land.shp')
 GRIS_BBOX_FILE = os.path.join(GIS_ROOT, 'greenland_area_bbox/greenland_area_bbox.shp')
 SURF_CONTOURS_FILE = os.path.join(GIS_ROOT, 'gimp_contours/gimpdem_90m_v01.1_EPSG3413_grisonly_contours_2km_i500/contour.shp')
 
+# Path to field/remotely-sensed measurements
+MEAS_BIO = os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets')
+
 # -----------------------------------------------------------------------------------
 # Algal growth model sensitivity runs (accessed by wildcard in script)
 MODEL_OUTPUTS_SENS_IBIO = os.path.join(WORK_ROOT, 'outputs/sensitivity_ibio')
@@ -1206,7 +1209,8 @@ meas = pd.read_excel(os.path.join(RESULTS, 'measurements_merged.xlsx'), index_co
 geom = gpd.GeoSeries.from_wkt(meas.geom)
 meas['geom'] = geom
 # convert WW to DW
-meas.loc[:,'biomass'] = ww_to_dw(meas['biomass'])
+meas.loc[:,'meas_mean_ng_dw_ml'] = ww_to_dw(meas['biomass'])
+meas.loc[:,'meas_sd_ng_dw_ml'] = ww_to_dw(meas['sd'])
 
 # %% trusted=true
 meas
@@ -1241,13 +1245,21 @@ pts_modelled
 meas_mod = pd.merge(left=meas, right=pts_modelled, left_on=['d_id', 'date', 'site'], right_on=['study', 'date', 'site'])
 
 # %% trusted=true
+# Do some tidying up
 for col in ['modelled.25','modelled.50', 'modelled.75']:
     print(col)
     meas_mod.loc[:,col] = pd.to_numeric(meas_mod[col])
+    # Add units to these columns
+    meas_mod = meas_mod.rename(columns={col:col+'_ngdwml'})
+# Make sure no duplicates
 meas_mod = meas_mod.drop_duplicates()
+# Get rid of irrelevant columns
+meas_mod = meas_mod.drop(columns=['level_0', 'd_id'])
+# More renaming
+meas_mod = meas_mod.rename(columns={'biomass':'meas_cells_ml', 'biomass_col':'study_dataset_source_column', 'sd':'meas_sd_cells_ml'})
 
 # %% trusted=true
-meas_mod.to_csv(os.path.join(RESULTS, 'Fig5A_measurements_vs_QMC_modelled.csv'), index=False)
+meas_mod.head()
 
 # %% [markdown]
 # ### Pt 2: Extract daily time series to compare with Stibal 2017 (2014 data)
@@ -1271,9 +1283,8 @@ plt.grid()
 
 # %% trusted=true
 # Measured-modelled data
-#mmdf = pd.read_csv(os.path.join(RESULTS, 'fig4_data.csv'))
 mmdf = meas_mod
-#mmdf['date'] = pd.to_datetime(mmdf.date, dayfirst=True)
+
 # Model-derived IQR bounds around the 1:1 line, computed using least-squares by Chris
 bounds = pd.read_csv(os.path.join(RESULTS, 'extra_for_ted.csv'))
 
@@ -1315,13 +1326,13 @@ bounds = pd.read_csv(os.path.join(RESULTS, 'extra_for_ted.csv'))
 # plt.tight_layout()
 
 # %% trusted=true
-# Stibal measurements
-stib_ts = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets', 'all_data.csv'), parse_dates=['date'], dayfirst=False, na_values=['#VALUE!'])
-stib_ts = stib_ts[stib_ts.study == 'stib']
+# Stibal measurements, directly from their deposited data file
+stib_ts = pd.read_excel(os.path.join(MEAS_BIO, 'grl56634-sup-0002-2017gl075958_data_si.xlsx'), sheet_name='algal cells time series data')
+stib_ts = stib_ts.filter(items=['doy 2014', 'cells/ml'], axis='columns').dropna()
+stib_ts['date'] = [dt.datetime.strptime(f'2014-{int(d)}', '%Y-%j') for d in stib_ts['doy 2014']]
+# Convert to dry weight
+stib_ts['observed.cells.ml.dw'] = ww_to_dw(stib_ts['cells/ml'])
 stib_ts.head()
-
-# %% trusted=true
-mmdf.head()
 
 # %% trusted=true
 plt.figure(figsize=(8, 2.5))
@@ -1336,43 +1347,40 @@ ax = plt.subplot(121)
 plt.grid(linestyle=':')
 
 # Plot a 1:1 line by using the modelled data plotted against itself.
-origin = np.linspace(0,mmdf['modelled.50'].max(), 1000)
+origin = np.linspace(0,mmdf['modelled.50_ngdwml'].max(), 1000)
 plt.plot(origin, origin, 'tab:cyan', marker='none', linewidth=1)
 
 # Plot IQR of model values, based on linear regression by CW
 X = sm.add_constant(bounds.x_vals)
 r25 = sm.OLS(bounds.y_25, X).fit()
 r75 = sm.OLS(bounds.y_75, X).fit()
-x = np.arange(0, mmdf['modelled.50'].max(), 100)
+x = np.arange(0, mmdf['modelled.50_ngdwml'].max(), 100)
 q25_extrap = r25.params[1] * x + r25.params[0]
 q75_extrap = r75.params[1] * x + r75.params[0]
 plt.fill_between(x, q25_extrap, q75_extrap, color='tab:cyan', alpha=0.5)
-#plt.fill_between(bounds.x_vals, bounds.y_25, bounds.y_75, color='tab:cyan', alpha=0.5)
 
 # Optional graphing of model IQR per-point
 #combined = np.vstack((np.array(mmdf['modelled.50'] - mmdf['modelled.25']),np.array(mmdf['modelled.75'] - mmdf['modelled.50'])))
 #plt.hlines(mmdf['mean'], mmdf['modelled.25'], mmdf['modelled.75'], alpha=0.5)
 
 # Plot measured stdev
-plt.vlines(mmdf['modelled.50'], mmdf['biomass']+mmdf['sd'], mmdf['biomass']-mmdf['sd'], color='grey', linewidth=0.5)
+plt.vlines(mmdf['modelled.50_ngdwml'], 
+           mmdf['meas_mean_ng_dw_ml']+mmdf['meas_sd_ng_dw_ml'], 
+           mmdf['meas_mean_ng_dw_ml']-mmdf['meas_sd_ng_dw_ml'], 
+           color='grey', linewidth=0.5)
 # Plot data points
 large_n = mmdf[mmdf['n.samples'] >= threshold_n]
-plt.plot(large_n['modelled.50'], large_n['biomass'], 'ok', markersize=4, label=r'$n \geq 5$')
+plt.plot(large_n['modelled.50_ngdwml'], large_n['meas_mean_ng_dw_ml'], 'ok', markersize=4, label=rf'$n \geq {threshold_n}$')
 small_n = mmdf[mmdf['n.samples'] < threshold_n]
-plt.plot(small_n['modelled.50'], small_n['biomass'], 'o', markersize=4, mfc='none', mec='grey', label=r'$n<5$')
-
-# Add Stibal 2013 values
-# All these are n=3, i.e. small_n
-#plt.vlines(stib13['modelled.50'], stib13['abundance_ngdwml']+stib13['abundance_sd_ngdwml'], stib13['abundance_ngdwml']-stib13['abundance_sd_ngdwml'], color='k', linewidth=0.5)
-#plt.plot(stib13['modelled.50'], stib13['abundance_ngdwml'], 'o', markersize=4, mfc='none', mec='k')
+plt.plot(small_n['modelled.50_ngdwml'], small_n['meas_mean_ng_dw_ml'], 'o', markersize=4, mfc='none', mec='grey', label=r'$n<5$')
 
 # Indicate stdev overshoots with triangle
-over = mmdf[mmdf['sd'] > 30000]
-plt.plot(over['modelled.50'], [39200]*len(over), marker='^', color='grey', linestyle='none', markersize=5)
+over = mmdf[mmdf['meas_sd_ng_dw_ml'] > 30000]
+plt.plot(over['modelled.50_ngdwml'], [39200]*len(over), marker='^', color='grey', linestyle='none', markersize=5)
 
 # Highlight upe sample
 upe = mmdf[mmdf['study'] == 'upe']
-plt.plot(upe['modelled.50'], upe['biomass'], 'o', markersize=3, color='gold')
+plt.plot(upe['modelled.50_ngdwml'], upe['meas_mean_ng_dw_ml'], 'o', markersize=3, color='gold')
 
 plt.xlabel(f'Modelled ({UNIT_DW})')
 plt.ylabel(f'Measured ({UNIT_DW})')
@@ -1428,8 +1436,9 @@ mmdf[mmdf['n.samples'] >= 5].describe()
 # weights=1/(meas_mod['sd']**2)
 
 # %% trusted=true
-with pd.ExcelWriter(os.path.join(RESULTS, 'fig5b.xlsx')) as w:
-    subset.to_excel(w, sheet_name='S6_model_ensemble_2014')
+with pd.ExcelWriter(os.path.join(RESULTS, 'fig5.xlsx')) as w:
+    mmdf.to_excel(w, sheet_name='A_measured_model_comparison')
+    subset.to_excel(w, sheet_name='B_S6_model_ensemble_2014')
 
 # %% [markdown]
 # #### Stibal statistics for text
@@ -1452,6 +1461,7 @@ print('Total biomass of model:', subset.loc[stib_mean_reg1D.index[0]:stib_mean_r
 # ## SFig. 3 Comparison with Wang 2018 timeseries
 
 # %% trusted=true
+# CSV file created from polygons shapefile provided by Shujie Wang, December 2025
 pts_wang = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets/wang2018_fig3_polygon_centres_epsg4326.csv'), skiprows=1)
 pts_wang = gpd.GeoDataFrame(pts_wang, geometry=gpd.points_from_xy(pts_wang.lon, pts_wang.lat, crs=4326)).to_crs(3413)
 pts_wang
@@ -1463,6 +1473,7 @@ ax = mar.MSK.plot()
 pts_wang.plot(color='red', ax=ax.axes, marker='+')
 
 # %% trusted=true
+# This file was created manually using data from the open-data source file Wang2018.grl58209-sup-0002-2018gl080455-ds01.xlsx, tab 'algal abundance across four sites'.
 ts_wang = pd.read_csv(os.path.join(WORK_ROOT, 'glacier_algal_biomass_datasets/wang2018_cells_ml_4_sites.csv'), parse_dates=True, index_col='date', dayfirst=True)
 
 # %% trusted=true
